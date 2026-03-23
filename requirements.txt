@@ -1,0 +1,56 @@
+# =====================================
+# Core Framework
+# =====================================
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# =====================================
+# Database
+# =====================================
+sqlalchemy>=2.0.0
+aiomysql>=0.2.0
+
+# =====================================
+# LLM Providers
+# =====================================
+groq>=0.4.0
+openai>=1.10.0
+
+# =====================================
+# HTTP Client (used by Sarvam API calls)
+# =====================================
+httpx>=0.27.0
+
+# =====================================
+# Speech-to-Text (STT)
+# =====================================
+# Sarvam AI (primary — Indian languages)
+# No extra package needed — uses httpx
+#
+# Whisper (local fallback)
+openai-whisper>=20231117
+soundfile>=0.12.1
+numpy>=1.24.0
+#
+# Deepgram (cloud fallback)
+deepgram-sdk>=3.2.0
+
+# =====================================
+# Text-to-Speech (TTS)
+# =====================================
+# Sarvam AI (primary — Indian language voices)
+# No extra package needed — uses httpx
+#
+# gTTS (free fallback)
+gtts>=2.5.0
+pydub>=0.25.1
+audio-recorder-streamlit
+# =====================================
+# Utilities
+# =====================================
+aiolimiter>=1.1.0
+tenacity>=8.2.3
+structlog>=24.1.0
+python-dotenv>=1.0.0

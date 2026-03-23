@@ -1,0 +1,537 @@
+"""
+Knowledge Handler — Answers NAVIGATION and GENERAL questions from JSON files.
+
+Used for two flows:
+  NAVIGATION → reads app/schemas/navigation.json
+               answers "how to register", "where is mandi bhav screen", etc.
+  GENERAL    → reads app/schemas/general_questions.json
+               answers "what is krushi ratn", "is it free", "refund policy", etc.
+
+HOW IT WORKS:
+  1. Load both JSON files into memory at startup (cached in self)
+  2. Auto-reload if the file has changed on disk (mtime check, no restart needed)
+  3. Score every JSON entry against the user question (tag + title + word overlap)
+  4. Pick top 1-3 matching entries
+  5. Send matched content + question to LLM → compose clean English answer
+  6. Return English answer  (chat_handler translates to Gujarati)
+
+SCORING (updated):
+  +3.0  question-title similarity bonus (prevents wrong entry winning on tie)
+  +2.0  per matching tag (exact substring match in question)
+  +0.5  per matching word from entry text fields (2+ char words for Gujarati support)
+
+WHY USE LLM HERE:
+  The user might ask in Gujarati, use synonyms, or ask a follow-up.
+  A raw JSON entry dump would be ugly. One small LLM call (~300 tokens)
+  produces a clean, conversational answer from the matched content.
+  This is the ONLY LLM call in the NAVIGATION/GENERAL flow.
+
+WHY NOT USE THE DB:
+  Navigation and FAQ data is static — it doesn't live in the database.
+  Putting it in JSON files means: easy to edit, no DB dependency,
+  instant lookup, and the LLM doesn't need to write SQL for it.
+"""
+
+import json
+import os
+import re
+from pathlib import Path
+from typing import List, Tuple, Optional, Dict, Any
+
+from app.services.llm.manager  import get_llm_manager
+from app.models.chat_models     import LLMMessage
+from app.core.logger            import get_logger, Timer
+
+# Lazy import to avoid circular dependency
+def _get_orchestrator():
+    from app.services.agent.orchestrator import get_orchestrator
+    return get_orchestrator()
+
+logger = get_logger("knowledge_handler")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JSON file paths
+# ─────────────────────────────────────────────────────────────────────────────
+_SCHEMAS_DIR = Path("app/schemas")
+_NAV_FILE    = _SCHEMAS_DIR / "navigation.json"
+_GEN_FILE    = _SCHEMAS_DIR / "general_questions.json"
+
+
+def _load_json_file(path: Path) -> dict:
+    """Load a JSON file. Returns empty dict on any error."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        logger.debug(f"Loaded {path.name}")
+        return data
+    except FileNotFoundError:
+        logger.error(f"❌ JSON file not found: {path}")
+        return {}
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ Invalid JSON in {path}: {e}")
+        return {}
+    except Exception as e:
+        logger.error_with_context(e, {"action": "load_json", "file": str(path)})
+        return {}
+
+
+def _file_mtime(path: Path) -> float:
+    """Return file modification time, or 0.0 if file not found."""
+    try:
+        return path.stat().st_mtime
+    except Exception:
+        return 0.0
+
+
+def _word_overlap_score(text_a: str, text_b: str) -> float:
+    """
+    Count shared words between two strings.
+    Uses len >= 2 (not 4) to support short Gujarati words like 'ભાવ', 'મણ'.
+    Returns overlap count * 0.5.
+    """
+    words_a = set(w for w in text_a.split() if len(w) >= 2)
+    words_b = set(w for w in text_b.split() if len(w) >= 2)
+    return len(words_a & words_b) * 0.5
+
+
+def _title_similarity(entry_question: str, user_question: str) -> float:
+    """
+    Bonus score when the entry's question title closely matches the user query.
+    +3.0 if 60%+ of title words appear in user query — prevents tie-breaking
+    errors when two entries have similar tags but different question titles.
+
+    Example fix:
+      User: "what languages does chatbot support"
+      gq_013 title: "Can I use the app in Gujarati?"   → 0% match → 0.0
+      gq_036 title: "What languages does chatbot..."   → 80% match → 3.0
+      → gq_036 correctly wins
+    """
+    q_words     = set(w.lower() for w in user_question.split() if len(w) >= 3)
+    title_words = set(w.lower().strip("?.,") for w in entry_question.split() if len(w) >= 3)
+    if not title_words:
+        return 0.0
+    overlap_ratio = len(q_words & title_words) / len(title_words)
+    return 3.0 if overlap_ratio >= 0.6 else (1.5 if overlap_ratio >= 0.4 else 0.0)
+
+
+def _score_entry(entry: dict, question: str) -> float:
+    """
+    Score how well a JSON entry matches the user question.
+
+    Scoring breakdown:
+      +3.0  title similarity bonus (prevents wrong entry winning on ties)
+      +2.0  per matching tag (exact substring match — handles EN/Romanized/Gujarati)
+      +0.5  per shared word between question and entry text (len >= 2 for Gujarati)
+
+    Returns 0.0 if no match at all.
+    """
+    # Use both lowercased and original question for matching
+    # (Gujarati has no case so .lower() is a no-op, but English tags need it)
+    q_lower    = question.lower()
+    q_original = question
+
+    score = 0.0
+
+    # ── Title similarity bonus ────────────────────────────────────────────────
+    entry_question = entry.get("question", "")
+    score += _title_similarity(entry_question, question)
+
+    # ── Tag matching ─────────────────────────────────────────────────────────
+    # Each tag that appears in the question adds +2.0
+    # Check both lowercased and original to handle APMC, Gujarati script, etc.
+    for tag in entry.get("tags", []):
+        tag_lower = tag.lower()
+        if tag_lower in q_lower or tag in q_original:
+            score += 2.0
+
+    # ── Word overlap ─────────────────────────────────────────────────────────
+    text_fields = []
+    for key in ("question", "answer", "description", "screen",
+                "how_to_reach", "how_to_use", "how_to_sell", "how_to_buy",
+                "what_you_see", "tip", "statuses"):
+        val = entry.get(key)
+        if val and isinstance(val, str):
+            text_fields.append(val)
+
+    for key in ("sections", "sub_screens", "interactions"):
+        val = entry.get(key)
+        if val:
+            text_fields.append(str(val))
+
+    combined_text = " ".join(text_fields).lower()
+    score += _word_overlap_score(q_lower, combined_text)
+
+    return score
+
+
+def _find_top_matches(
+    entries:  List[dict],
+    question: str,
+    top_n:    int = 3,
+) -> List[Tuple[dict, float]]:
+    """
+    Score all entries and return top N with score > 0, sorted descending.
+    """
+    scored = [(e, _score_entry(e, question)) for e in entries]
+    scored = [(e, s) for e, s in scored if s > 0.0]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored[:top_n]
+
+
+class KnowledgeHandler:
+    """
+    Answers NAVIGATION and GENERAL questions from JSON knowledge bases.
+    Loaded at startup and auto-reloaded when the JSON file changes on disk.
+    """
+
+    def __init__(self):
+        self.llm_manager  = get_llm_manager()
+        self._nav_flows:  List[dict] = []
+        self._gen_qs:     List[dict] = []
+        self._nav_loaded  = False
+        self._gen_loaded  = False
+        # Track file modification times for auto-reload
+        self._nav_mtime: float = 0.0
+        self._gen_mtime: float = 0.0
+        self._load_all()
+
+    # ── Loading ───────────────────────────────────────────────────────────────
+
+    def _load_all(self):
+        """Load both JSON files into memory."""
+        logger.step("KNOWLEDGE HANDLER", "Loading JSON knowledge bases from disk")
+
+        with Timer() as t:
+            nav_data = _load_json_file(_NAV_FILE)
+            gen_data = _load_json_file(_GEN_FILE)
+
+        self._nav_flows  = nav_data.get("flows", [])
+        self._gen_qs     = gen_data.get("questions", [])
+        self._nav_loaded = len(self._nav_flows) > 0
+        self._gen_loaded = len(self._gen_qs) > 0
+
+        # Record mtimes so we can detect changes later
+        self._nav_mtime  = _file_mtime(_NAV_FILE)
+        self._gen_mtime  = _file_mtime(_GEN_FILE)
+
+        logger.step_done(
+            "KNOWLEDGE HANDLER LOAD",
+            t.elapsed_ms,
+            navigation_entries=len(self._nav_flows),
+            general_entries=len(self._gen_qs)
+        )
+
+        if not self._nav_loaded:
+            logger.warning(f"⚠️  navigation.json is empty or missing: {_NAV_FILE}")
+        if not self._gen_loaded:
+            logger.warning(f"⚠️  general_questions.json is empty or missing: {_GEN_FILE}")
+
+    def _check_and_reload(self):
+        """
+        Auto-reload JSON files if they have been modified on disk since last load.
+        Called at the start of every answer_navigation / answer_general call.
+        This means updating general_questions.json takes effect immediately —
+        no server restart required.
+        """
+        nav_mtime_now = _file_mtime(_NAV_FILE)
+        gen_mtime_now = _file_mtime(_GEN_FILE)
+
+        if nav_mtime_now != self._nav_mtime or gen_mtime_now != self._gen_mtime:
+            logger.info(
+                "🔄 JSON knowledge files changed on disk — auto-reloading..."
+            )
+            self._load_all()
+            logger.info(
+                "✅ Knowledge base auto-reloaded",
+                nav=len(self._nav_flows),
+                gen=len(self._gen_qs),
+            )
+
+    def reload(self):
+        """
+        Force-reload JSON files from disk.
+        Can be called via an admin endpoint or from tests.
+        Auto-reload via _check_and_reload() handles normal edits automatically.
+        """
+        logger.info("🔄 Force-reloading knowledge base JSONs...")
+        self._load_all()
+        logger.info("✅ Knowledge base reloaded",
+                    nav=len(self._nav_flows), gen=len(self._gen_qs))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Public answer methods
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def answer_navigation(self, question: str) -> str:
+        """
+        Answer a NAVIGATION question using navigation.json.
+
+        Process:
+          1. Auto-reload if navigation.json was modified on disk
+          2. Score all navigation flow entries against the question
+          3. Pick top 3 matches
+          4. LLM composes a clear English answer from matched content
+          5. Return English string (caller translates to Gujarati)
+        """
+        logger.step("NAVIGATION HANDLER", f"Looking up: {question[:70]}")
+
+        # Auto-reload if file changed
+        self._check_and_reload()
+
+        if not self._nav_loaded:
+            logger.warning("Navigation data not loaded — returning fallback")
+            return self._nav_fallback()
+
+        with Timer() as t:
+            matches = _find_top_matches(self._nav_flows, question, top_n=3)
+        logger.step_done("NAV SCORING", t.elapsed_ms, matches_found=len(matches))
+
+        if not matches:
+            logger.no_data_found("NAVIGATION", question)
+            logger.info("NAV: no match — trying SQL fallback once")
+            sql_answer = await self._sql_fallback(question)
+            if sql_answer:
+                return sql_answer
+            return self._nav_fallback()
+
+        for entry, score in matches:
+            logger.json_lookup("NAVIGATION", entry.get("id", "?"), score)
+            logger.debug(f"  NAV match: {entry.get('screen','?')} (score={score:.1f})")
+
+        context = self._format_nav_context([e for e, _ in matches])
+        answer  = await self._compose_answer(question, context, flow="NAVIGATION")
+        logger.final_answer(answer, lang="en")
+        return answer
+
+    async def answer_general(self, question: str) -> str:
+        """
+        Answer a GENERAL question using general_questions.json.
+
+        Process:
+          1. Auto-reload if general_questions.json was modified on disk
+          2. Score all 36 FAQ entries against the question
+          3. Pick top 3 matches (increased from 2 — more entries, more context needed)
+          4. LLM composes a clean English answer from matched content
+          5. Return English string (caller translates to Gujarati)
+        """
+        logger.step("GENERAL HANDLER", f"Looking up: {question[:70]}")
+
+        # Auto-reload if file changed
+        self._check_and_reload()
+
+        if not self._gen_loaded:
+            logger.warning("General QA data not loaded — returning fallback")
+            return self._gen_fallback()
+
+        with Timer() as t:
+            matches = _find_top_matches(self._gen_qs, question, top_n=3)
+        logger.step_done("GEN SCORING", t.elapsed_ms, matches_found=len(matches))
+
+        if not matches:
+            logger.no_data_found("GENERAL", question)
+            logger.info("GEN: no match — trying SQL fallback once")
+            sql_answer = await self._sql_fallback(question)
+            if sql_answer:
+                return sql_answer
+            return self._gen_fallback()
+
+        for entry, score in matches:
+            logger.json_lookup("GENERAL", entry.get("id", "?"), score)
+            logger.debug(f"  GEN match: {entry.get('question','?')[:60]} (score={score:.1f})")
+
+        context = self._format_gen_context([e for e, _ in matches])
+        answer  = await self._compose_answer(question, context, flow="GENERAL")
+        logger.final_answer(answer, lang="en")
+        return answer
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Context formatters
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _format_nav_context(self, entries: List[dict]) -> str:
+        parts = []
+        for entry in entries:
+            lines = [f"SCREEN: {entry.get('screen', '')}"]
+
+            if entry.get("description"):
+                lines.append(f"Description: {entry['description']}")
+            if entry.get("how_to_reach"):
+                lines.append(f"How to reach: {entry['how_to_reach']}")
+            if entry.get("how_to_use"):
+                lines.append(f"How to use: {entry['how_to_use']}")
+            if entry.get("how_to_sell"):
+                lines.append(f"How to sell: {entry['how_to_sell']}")
+            if entry.get("how_to_buy"):
+                lines.append(f"How to buy: {entry['how_to_buy']}")
+            if entry.get("what_you_see"):
+                lines.append(f"What you see: {entry['what_you_see']}")
+            if entry.get("sections"):
+                section_list = entry["sections"]
+                if isinstance(section_list, list):
+                    lines.append("Sections available:")
+                    lines.extend(f"  • {s}" for s in section_list)
+            if entry.get("sub_screens"):
+                sub = entry["sub_screens"]
+                if isinstance(sub, dict):
+                    lines.append("Sub-screens:")
+                    lines.extend(f"  • {k}: {v}" for k, v in sub.items())
+            if entry.get("interactions"):
+                lines.append(f"Actions: {entry['interactions']}")
+            if entry.get("statuses"):
+                lines.append(f"Order statuses: {entry['statuses']}")
+            if entry.get("tip"):
+                lines.append(f"Tip: {entry['tip']}")
+
+            parts.append("\n".join(lines))
+
+        return "\n\n---\n\n".join(parts)
+
+    def _format_gen_context(self, entries: List[dict]) -> str:
+        """Format general FAQ entries into a Q&A block for the LLM."""
+        parts = []
+        for entry in entries:
+            q = entry.get("question", "")
+            a = entry.get("answer", "")
+            parts.append(f"Q: {q}\nA: {a}")
+        return "\n\n".join(parts)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # LLM answer composition
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _compose_answer(
+        self,
+        question: str,
+        context:  str,
+        flow:     str,
+    ) -> str:
+        """
+        Use LLM to compose a clean, natural English answer from matched context.
+        max_tokens raised to 600 — new FAQ entries have answers up to 1246 chars.
+        """
+        if flow == "NAVIGATION":
+            system = (
+                "You are a navigation assistant for the Krushi Ratn agricultural app.\n"
+                "The user wants to know HOW TO USE the app or WHERE TO FIND a feature.\n\n"
+                "CRITICAL RULES:\n"
+                "1. Output ONLY the exact steps from the 'how_to_use' field provided below.\n"
+                "2. Do NOT add, remove, or rephrase any step.\n"
+                "3. Do NOT add intro sentences, extra tips, or explanations not in the source.\n"
+                "4. Do NOT add a closing line like 'Let me know if you need help'.\n"
+                "5. Keep every step as a numbered list exactly as written.\n"
+                "6. Do NOT mention: JSON, database, API, or technical internals.\n"
+                "7. Answer in ENGLISH only."
+            )
+        else:  # GENERAL
+            system = (
+                "You are a helpful assistant for the Krushi Ratn agricultural marketplace app.\n"
+                "Answer the user's general question using ONLY the information provided below.\n"
+                "Be friendly, concise, and accurate.\n"
+                "Do NOT make up information that is not in the provided content.\n"
+                "Answer in ENGLISH only. Do not write any Gujarati or Hindi words."
+            )
+
+        user_message = (
+            f"User Question: {question}\n\n"
+            f"Relevant Information:\n{context}\n\n"
+            f"Provide a clear, helpful English answer based only on the above information."
+        )
+
+        messages = [
+            LLMMessage(role="system", content=system),
+            LLMMessage(role="user",   content=user_message),
+        ]
+
+        call_num = 1
+        logger.llm_call_start(
+            call_num,
+            f"{flow}_compose",
+            provider=self.llm_manager.current_provider,
+            est_tokens=len(context) // 4 + 200
+        )
+
+        try:
+            with Timer() as t:
+                response = await self.llm_manager.generate(
+                    messages    = messages,
+                    temperature = 0.3,
+                    max_tokens  = 600,   # raised from 350 — new answers up to 1246 chars
+                )
+            logger.llm_call_done(
+                call_num,
+                f"{flow}_compose",
+                t.elapsed_ms,
+                tokens_used=response.tokens_used or 0
+            )
+            answer = response.content.strip()
+            logger.debug(f"LLM answer ({flow}): {answer[:100]}")
+            return answer
+
+        except Exception as e:
+            logger.error_with_context(e, {
+                "action": "_compose_answer",
+                "flow":   flow,
+                "query":  question[:100]
+            })
+            logger.warning("LLM compose failed — returning raw context excerpt")
+            return context[:600].strip()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Fallback responses
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _sql_fallback(self, question: str):
+        """
+        When NAV or GENERAL has no matching entry, try SQL pipeline directly.
+        Bypasses route agent to avoid infinite recursion.
+        Returns answer string if SQL found data, else None.
+        """
+        try:
+            orchestrator = _get_orchestrator()
+            result  = await orchestrator._flow_sql(question)
+            answer  = result.get("answer", "")
+            no_data = [
+                "couldn't find", "no information", "not available",
+                "no data", "not found", "cannot find",
+            ]
+            if answer and not any(p in answer.lower() for p in no_data):
+                logger.info("SQL fallback succeeded for NAV/GEN question")
+                return answer
+            return None
+        except Exception as e:
+            logger.error_with_context(e, {"action": "_sql_fallback", "query": question[:100]})
+            return None
+
+    @staticmethod
+    def _nav_fallback() -> str:
+        return (
+            "I couldn't find specific navigation instructions for your question. "
+            "Please explore the app's main menu — you'll find K-Shop, Mandi Bhav, "
+            "Videos, News, and Buy/Sell sections on the Home screen. "
+            "You can also go to Profile for account settings. "
+            "If you still need help, contact support through Profile → Help & Support."
+        )
+
+    @staticmethod
+    def _gen_fallback() -> str:
+        return (
+            "Krushi Ratn is a free agricultural marketplace app for Gujarat farmers. "
+            "It provides crop market prices (mandi bhav), K-Shop for buying agricultural "
+            "products, a buy/sell marketplace between farmers, educational farming videos, "
+            "and agricultural news. "
+            "Please ask me a specific question about any of these features."
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Singleton
+# ─────────────────────────────────────────────────────────────────────────────
+
+_instance: Optional[KnowledgeHandler] = None
+
+
+def get_knowledge_handler() -> KnowledgeHandler:
+    global _instance
+    if _instance is None:
+        _instance = KnowledgeHandler()
+    return _instance

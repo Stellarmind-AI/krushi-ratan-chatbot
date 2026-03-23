@@ -1,0 +1,249 @@
+# .gitignore for AI Chatbot Backend - Krushi Node
+
+# ================================
+# PYTHON
+# ================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# ================================
+# ENVIRONMENT & SECRETS
+# ================================
+# Environment variables (IMPORTANT - contains API keys!)
+.env
+.env.local
+.env.*.local
+
+# Backup of env files
+.env.backup
+.env.old
+
+# ================================
+# IDE / EDITOR
+# ================================
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+
+# ================================
+# OPERATING SYSTEM
+# ================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.directory
+.Trash-*
+
+# ================================
+# LOGS & DATABASES
+# ================================
+# Log files
+*.log
+logs/
+*.log.*
+
+# Database files (local development)
+*.db
+*.sqlite
+*.sqlite3
+
+# SQL dumps (be careful with production dumps!)
+*.sql
+*.dump
+
+# ================================
+# TEMPORARY FILES
+# ================================
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~.nib
+local_settings.py
+
+# Temporary audio files (TTS/STT)
+*.mp3.tmp
+*.wav.tmp
+
+# ================================
+# PROJECT SPECIFIC
+# ================================
+# Generated schema files (can be regenerated)
+app/schemas/condensed_schema.json
+app/schemas/tools/*_tool.json
+
+# Audio cache (if you implement caching)
+audio_cache/
+tts_cache/
+stt_cache/
+
+# Uploaded files (user uploads during development)
+uploads/
+temp_uploads/
+
+# Generated reports
+reports/
+output/
+
+# ================================
+# WHISPER MODEL CACHE
+# ================================
+# Whisper downloads models to ~/.cache
+# Don't commit these large files
+.cache/
+whisper_models/
+
+# ================================
+# STREAMLIT
+# ================================
+# Streamlit cache
+.streamlit/
+
+# ================================
+# MISC
+# ================================
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath
+*.sage.py
+
+# Spyder
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
+
+# mkdocs
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre
+.pyre/
+
+# ================================
+# KEEP THESE FILES (EXAMPLES)
+# ================================
+# Don't ignore example files
+!.env.example
+!README.md
+!requirements.txt
+
+# ignore full schema (source of truth)
+app/schemas/full_schema.json
+
+# ================================
+# PRODUCTION SPECIFIC (uncomment when deploying)
+# ================================
+# SSL certificates
+# *.pem
+# *.key
+# *.crt
+
+# Production config
+# config/production.py
+# secrets/
+app/cache/query_cache.json
