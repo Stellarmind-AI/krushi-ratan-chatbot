@@ -95,10 +95,10 @@ class QueryExecutor:
                 pass
 
 
-            logger.query_execution(
-                query=clean_sql,
+            logger.sql_execution_done(
+                table=table_name,
                 rows=len(rows),
-                execution_time=execution_time
+                elapsed_ms=execution_time * 1000
             )
 
             

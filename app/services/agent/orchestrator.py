@@ -137,7 +137,6 @@ class Orchestrator:
                                 flow, cache_hit
         """
         pipeline_start = time.perf_counter()
-        logger.pipeline_start(user_query)
 
         try:
             # ── STEP 1: Route Agent ─────────────────────────────────────────

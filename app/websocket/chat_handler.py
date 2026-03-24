@@ -191,6 +191,11 @@ class ChatHandler:
         if not confirmed_intent:
             history.messages.append(ChatMessage(role="user", content=user_text))
 
+        print(f"\n{'='*70}", flush=True)
+        print(f"🚀 PIPELINE START | session={session_id}", flush=True)
+        print(f"  📥 USER INPUT: {user_text}", flush=True)
+        print(f"{'='*70}", flush=True)
+
         # ── Step 1: Language detection ───────────────────────────────────────
         # When resuming after F1 clarification, reuse the already-detected lang.
         if lang_type_override:
@@ -201,6 +206,7 @@ class ChatHandler:
                 processed_text, lang_type = await self.language_processor.process(user_text)
             logger.info("LANGUAGE DETECTED", lang_type=lang_type,
                         original=user_text[:60], elapsed_ms=f"{t.elapsed_ms:.1f}ms")
+            print(f"  🔤 LANGUAGE: {lang_type} | processed: {processed_text}", flush=True)
 
         # ── F1: Confirmation Layer ───────────────────────────────────────────
         # Only runs on the FIRST pass (confirmed_intent is None).
@@ -264,12 +270,16 @@ class ChatHandler:
                 return
         logger.info("ENGLISH ANSWER READY", chars=len(english_answer),
                     flow=result.get("flow"), elapsed_ms=f"{t.elapsed_ms:.0f}ms")
+        print(f"\n  📝 ENGLISH ANSWER (flow={result.get('flow')}, {t.elapsed_ms:.0f}ms):", flush=True)
+        print(f"    {english_answer}", flush=True)
 
         # ── Step 3: Translate to user language ───────────────────────────────
         with Timer() as t:
             final_answer = await translate_to_user_language(english_answer, lang_type)
         logger.info("TRANSLATION DONE", lang_type=lang_type,
                     translated=(lang_type != "english"), elapsed_ms=f"{t.elapsed_ms:.0f}ms")
+        print(f"\n  🌐 TRANSLATED ANSWER (lang={lang_type}, {t.elapsed_ms:.0f}ms):", flush=True)
+        print(f"    {final_answer}", flush=True)
 
         # ── Step 4: Send response ────────────────────────────────────────────
         history.messages.append(ChatMessage(role="assistant", content=final_answer))
@@ -312,6 +322,12 @@ class ChatHandler:
         logger.info("PIPELINE COMPLETE", total_ms=f"{total_ms:.0f}ms",
                     flow=result.get("flow"), lang_type=lang_type,
                     cached=result.get("cache_hit", False))
+        print(f"\n{'='*70}", flush=True)
+        print(f"✅ PIPELINE COMPLETE | {total_ms:.0f}ms | flow={result.get('flow')} | lang={lang_type}", flush=True)
+        print(f"  📥 USER:    {user_text}", flush=True)
+        print(f"  📤 ENGLISH: {english_answer}", flush=True)
+        print(f"  📤 FINAL:   {final_answer}", flush=True)
+        print(f"{'='*70}\n", flush=True)
 
     @staticmethod
     def _build_kshop_payload(result: dict) -> list:

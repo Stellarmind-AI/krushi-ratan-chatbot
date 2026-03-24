@@ -105,7 +105,6 @@ class ToolSelector:
             )
 
             selected = self._parse_and_expand(response.content, available_tools)
-            logger.tool_selection(tools=selected, query=user_query)
 
             return ToolSelectionResponse(
                 selected_tools=selected,

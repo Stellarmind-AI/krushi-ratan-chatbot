@@ -195,7 +195,7 @@ div[data-testid="stButton"] > button {
 def _init():
     defaults = {
         "chat_history":          [],
-        "ws_url":                "wss://test-ai.krushiratn.com/ws/chat",
+        "ws_url":                "ws://localhost:8002/ws/chat",
         "processing":            False,
         "session_id":            str(uuid.uuid4()),
         "pending_clarification": None,

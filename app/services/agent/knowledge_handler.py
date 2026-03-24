@@ -283,22 +283,45 @@ class KnowledgeHandler:
             return self._nav_fallback()
 
         with Timer() as t:
-            matches = _find_top_matches(self._nav_flows, question, top_n=3)
+            matches = _find_top_matches(self._nav_flows, question, top_n=5)
         logger.step_done("NAV SCORING", t.elapsed_ms, matches_found=len(matches))
 
-        if not matches:
+        # If keyword scoring found strong matches (top score >= 4.0), use them.
+        # Otherwise, send ALL entries to the LLM — keyword scoring fails for
+        # Gujarati queries where tags don't substring-match due to word order.
+        # With ~21 entries this costs only ~300 extra tokens.
+        top_score = matches[0][1] if matches else 0.0
+        if top_score >= 4.0:
+            candidates = matches
+            logger.info(f"NAV: strong keyword match (score={top_score:.1f}) — using top {len(matches)}")
+        else:
+            # Weak/no keyword match — let LLM see all entries
+            candidates = [(e, 0.0) for e in self._nav_flows]
+            logger.info(f"NAV: weak keyword match (score={top_score:.1f}) — sending all {len(candidates)} entries to LLM")
+
+        if not candidates:
             logger.no_data_found("NAVIGATION", question)
-            logger.info("NAV: no match — trying SQL fallback once")
+            logger.info("NAV: no entries at all — trying SQL fallback once")
             sql_answer = await self._sql_fallback(question)
             if sql_answer:
                 return sql_answer
             return self._nav_fallback()
 
-        for entry, score in matches:
+        for entry, score in matches[:5]:  # log top keyword matches for debugging
             logger.json_lookup("NAVIGATION", entry.get("id", "?"), score)
-            logger.debug(f"  NAV match: {entry.get('screen','?')} (score={score:.1f})")
 
-        context = self._format_nav_context([e for e, _ in matches])
+        # LLM picks the best entry — handles ALL languages natively
+        best_entries = await self._llm_select_best(question, candidates, flow="NAVIGATION")
+
+        # LLM said "no entry matches" → try SQL fallback, then generic fallback
+        if not best_entries:
+            logger.info("NAV: LLM found no matching entry — trying SQL fallback once")
+            sql_answer = await self._sql_fallback(question)
+            if sql_answer:
+                return sql_answer
+            return self._nav_fallback()
+
+        context = self._format_nav_context(best_entries)
         answer  = await self._compose_answer(question, context, flow="NAVIGATION")
         logger.final_answer(answer, lang="en")
         return answer
@@ -324,22 +347,41 @@ class KnowledgeHandler:
             return self._gen_fallback()
 
         with Timer() as t:
-            matches = _find_top_matches(self._gen_qs, question, top_n=3)
+            matches = _find_top_matches(self._gen_qs, question, top_n=5)
         logger.step_done("GEN SCORING", t.elapsed_ms, matches_found=len(matches))
 
-        if not matches:
+        # Same logic as NAV: strong keyword match → use pre-filtered, weak → send all to LLM
+        top_score = matches[0][1] if matches else 0.0
+        if top_score >= 4.0:
+            candidates = matches
+            logger.info(f"GEN: strong keyword match (score={top_score:.1f}) — using top {len(matches)}")
+        else:
+            candidates = [(e, 0.0) for e in self._gen_qs]
+            logger.info(f"GEN: weak keyword match (score={top_score:.1f}) — sending all {len(candidates)} entries to LLM")
+
+        if not candidates:
             logger.no_data_found("GENERAL", question)
-            logger.info("GEN: no match — trying SQL fallback once")
+            logger.info("GEN: no entries at all — trying SQL fallback once")
             sql_answer = await self._sql_fallback(question)
             if sql_answer:
                 return sql_answer
             return self._gen_fallback()
 
-        for entry, score in matches:
+        for entry, score in matches[:5]:
             logger.json_lookup("GENERAL", entry.get("id", "?"), score)
-            logger.debug(f"  GEN match: {entry.get('question','?')[:60]} (score={score:.1f})")
 
-        context = self._format_gen_context([e for e, _ in matches])
+        # LLM picks the best entry — handles ALL languages natively
+        best_entries = await self._llm_select_best(question, candidates, flow="GENERAL")
+
+        # LLM said "no entry matches" → try SQL fallback, then generic fallback
+        if not best_entries:
+            logger.info("GEN: LLM found no matching entry — trying SQL fallback once")
+            sql_answer = await self._sql_fallback(question)
+            if sql_answer:
+                return sql_answer
+            return self._gen_fallback()
+
+        context = self._format_gen_context(best_entries)
         answer  = await self._compose_answer(question, context, flow="GENERAL")
         logger.final_answer(answer, lang="en")
         return answer
@@ -394,6 +436,111 @@ class KnowledgeHandler:
             a = entry.get("answer", "")
             parts.append(f"Q: {q}\nA: {a}")
         return "\n\n".join(parts)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # LLM-based entry selection — language-proof matching
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _llm_select_best(
+        self,
+        question: str,
+        candidates: List[Tuple[dict, float]],
+        flow: str,
+    ) -> List[dict]:
+        """
+        Use the LLM to pick the best 1-2 entries from pre-filtered candidates.
+
+        WHY: Keyword scoring breaks for Gujarati (flexible word order, extra
+        particles like 'કેવી રીતે' between key words).  The LLM understands
+        ALL languages and phrasings natively — let it do the final matching.
+
+        COST: ~100-150 tokens (just IDs + screen names + descriptions).
+        This is cheaper than a wrong answer + confused user.
+
+        Returns: list of 1-2 best-matching entry dicts.
+        """
+        if len(candidates) <= 1:
+            return [e for e, _ in candidates]
+
+        # Build a compact numbered list for the LLM
+        options = []
+        id_to_entry = {}
+        for i, (entry, score) in enumerate(candidates, 1):
+            eid = entry.get("id", f"entry_{i}")
+            if flow == "NAVIGATION":
+                label = entry.get("screen", "") or entry.get("description", "")
+                desc  = entry.get("description", "")
+            else:
+                label = entry.get("question", "")
+                desc  = entry.get("answer", "")[:100] if entry.get("answer") else ""
+            options.append(f"{i}. [{eid}] {label} — {desc}")
+            id_to_entry[str(i)] = entry
+            id_to_entry[eid] = entry
+
+        options_text = "\n".join(options)
+
+        messages = [
+            LLMMessage(role="system", content=(
+                "You are a question matcher for the Krushi Ratn agricultural app.\n"
+                "The user asked a question. Pick the BEST matching entry from the list below.\n"
+                "The user may ask in English, Gujarati script, or Romanized Gujarati — handle all.\n\n"
+                "RULES:\n"
+                "- Return ONLY the number (e.g. '3') of the single best match.\n"
+                "- If two entries are equally relevant, return both numbers comma-separated (e.g. '2,5').\n"
+                "- If NO entry matches the question, return '0'.\n"
+                "- Do NOT explain your choice. Just the number(s)."
+            )),
+            LLMMessage(role="user", content=(
+                f'Question: "{question}"\n\n'
+                f"Entries:\n{options_text}\n\n"
+                f"Best match number(s):"
+            )),
+        ]
+
+        logger.llm_call_start(0, f"{flow}_select_best",
+                              provider=self.llm_manager.current_provider,
+                              est_tokens=len(options_text) // 4 + 50)
+        try:
+            with Timer() as t:
+                response = await self.llm_manager.generate(
+                    messages=messages,
+                    temperature=0.0,
+                    max_tokens=10,
+                )
+            logger.llm_call_done(0, f"{flow}_select_best", t.elapsed_ms,
+                                 tokens_used=response.tokens_used or 0)
+
+            raw = response.content.strip().rstrip(".")
+            print(f"  🎯 LLM ENTRY SELECTION ({flow}): question={question!r} → picked={raw!r}", flush=True)
+
+            # Handle "0", "none", "no match" — LLM correctly says nothing matches
+            if raw.lower() in ("0", "none", "no match", "n/a") or "none" in raw.lower():
+                logger.info(f"🎯 LLM says NO ENTRY matches — returning empty (will trigger fallback)")
+                return []   # empty = caller handles fallback properly
+
+            # Parse: "3" or "2,5" or "2, 5"
+            selected = []
+            for part in raw.replace(" ", "").split(","):
+                part = part.strip()
+                if part in id_to_entry:
+                    selected.append(id_to_entry[part])
+
+            if selected:
+                for entry in selected:
+                    eid = entry.get("id", "?")
+                    label = entry.get("screen", "") or entry.get("question", "")
+                    logger.info(f"🎯 LLM selected: {eid} — {label}")
+                return selected
+
+            # LLM returned something unexpected — return empty, let caller handle it
+            logger.warning(f"LLM entry selection returned unexpected: {raw!r} — returning empty")
+            return []
+
+        except Exception as e:
+            logger.warning(f"LLM entry selection failed: {e} — using top keyword scorers")
+
+        # Exception fallback only: return top 1-2 by keyword score
+        return [e for e, _ in candidates[:2]]
 
     # ─────────────────────────────────────────────────────────────────────────
     # LLM answer composition

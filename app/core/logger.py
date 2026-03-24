@@ -11,14 +11,113 @@ Every stage of the pipeline logs with:
 """
 
 import logging
+import os
 import sys
+import threading
 import time
 from typing import Any, Dict, Optional
 from datetime import datetime
 from app.core.config import settings
 
 
+_TERMINAL_LOCK = threading.Lock()
+_CONSOLE_READY = False
+
+
+def _supports_color() -> bool:
+    """Enable ANSI colors only when the current terminal is likely to support them."""
+    stream = getattr(sys, "stdout", None)
+    if not stream or not hasattr(stream, "isatty") or not stream.isatty():
+        return False
+
+    if os.name != "nt":
+        return True
+
+    return bool(
+        os.getenv("WT_SESSION")
+        or os.getenv("ANSICON")
+        or os.getenv("TERM_PROGRAM")
+        or os.getenv("ConEmuANSI") == "ON"
+    )
+
+
+def _configure_console() -> None:
+    """Best-effort UTF-8 console setup for Windows terminals."""
+    global _CONSOLE_READY
+    if _CONSOLE_READY:
+        return
+
+    _CONSOLE_READY = True
+
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+    if os.name != "nt":
+        return
+
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleOutputCP(65001)
+        kernel32.SetConsoleCP(65001)
+    except Exception:
+        pass
+
+
+def _write_terminal(text: str) -> None:
+    """Write Unicode text directly to the terminal when possible."""
+    _configure_console()
+
+    with _TERMINAL_LOCK:
+        if os.name == "nt":
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                kernel32 = ctypes.windll.kernel32
+                handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+                invalid_handle = ctypes.c_void_p(-1).value
+                mode = wintypes.DWORD()
+
+                if handle not in (0, invalid_handle) and kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                    written = wintypes.DWORD()
+                    kernel32.WriteConsoleW(handle, text, len(text), ctypes.byref(written), None)
+                    return
+            except Exception:
+                pass
+
+        stream = sys.stdout
+        try:
+            stream.write(text)
+        except UnicodeEncodeError:
+            if hasattr(stream, "buffer"):
+                stream.buffer.write(text.encode("utf-8", errors="replace"))
+            else:
+                stream.write(text.encode("ascii", errors="backslashreplace").decode("ascii"))
+        stream.flush()
+
+
+class UnicodeConsoleHandler(logging.Handler):
+    """Logging handler that writes through the Unicode-safe terminal writer."""
+
+    terminator = "\n"
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record) + self.terminator
+            _write_terminal(msg)
+        except Exception:
+            self.handleError(record)
+
+
 class ColoredFormatter(logging.Formatter):
+    USE_COLOR = _supports_color()
     COLORS = {
         'DEBUG':    '\033[36m',   # Cyan
         'INFO':     '\033[32m',   # Green
@@ -33,9 +132,9 @@ class ColoredFormatter(logging.Formatter):
     }
 
     def format(self, record: logging.LogRecord) -> str:
-        color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
+        color = self.COLORS.get(record.levelname, self.COLORS['RESET']) if self.USE_COLOR else ""
         emoji = self.EMOJIS.get(record.levelname, '')
-        reset = self.COLORS['RESET']
+        reset = self.COLORS['RESET'] if self.USE_COLOR else ""
         ts = datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         msg = f"{color}{emoji} [{record.levelname}]{reset} {ts} | {record.name} | {record.getMessage()}"
         if hasattr(record, 'extra_fields') and record.extra_fields:
@@ -55,10 +154,11 @@ class StructuredLogger:
     """
 
     def __init__(self, name: str):
+        _configure_console()
         self.logger = logging.getLogger(name)
         self.logger.setLevel(getattr(logging, settings.LOG_LEVEL))
         self.logger.handlers.clear()
-        handler = logging.StreamHandler(sys.stdout)
+        handler = UnicodeConsoleHandler()
         handler.setFormatter(ColoredFormatter())
         self.logger.addHandler(handler)
         self.logger.propagate = False
@@ -93,9 +193,7 @@ class StructuredLogger:
 
     def pipeline_start(self, query: str, client_id: str = ""):
         """Log start of full pipeline for a query."""
-        self._log(logging.INFO,
-                  f"{'='*60}\n🚀 PIPELINE START",
-                  query=query[:100], client=client_id)
+        _write_terminal(f"🚀 PIPELINE START | query={query[:100]} | client={client_id}\n")
 
     def pipeline_end(self, flow: str, total_ms: float, cached: bool = False):
         """Log end of full pipeline."""
@@ -121,6 +219,52 @@ class StructuredLogger:
         self._log(logging.INFO,
                   f"🌐 TRANSLATE [{direction.upper()}] DONE",
                   elapsed_ms=f"{elapsed_ms:.0f}ms", output_chars=text_len)
+
+    # ── Content-level logging — see actual text flowing through the pipeline ──
+
+    def translation_io(self, provider: str, direction: str,
+                       input_text: str, output_text: str, elapsed_ms: float = 0.0):
+        """
+        Log the FULL input and output of a translation call.
+        This is the key log for catching hallucinations in translation.
+        """
+        separator = "─" * 60
+        block = (
+            f"\n{separator}\n"
+            f"🌐 TRANSLATION [{provider.upper()}] {direction} ({elapsed_ms:.0f}ms)\n"
+            f"  INPUT  ({len(input_text)} chars):\n"
+            f"    {input_text}\n"
+            f"  OUTPUT ({len(output_text)} chars):\n"
+            f"    {output_text}\n"
+            f"{separator}"
+        )
+        self._log(logging.INFO, block)
+
+    def llm_io(self, purpose: str, provider: str, model: str,
+               system_prompt: str, user_prompt: str, response_text: str,
+               tokens_used: Optional[int] = None, elapsed_ms: float = 0.0):
+        """
+        Log the FULL prompt and response of an LLM call.
+        Truncates prompts at 500 chars but shows full response.
+        """
+        separator = "═" * 60
+        sys_display = system_prompt[:500] + ("…" if len(system_prompt) > 500 else "")
+        usr_display = user_prompt[:500] + ("…" if len(user_prompt) > 500 else "")
+        block = (
+            f"\n{separator}\n"
+            f"🤖 LLM CALL [{purpose}] — {provider}/{model} ({elapsed_ms:.0f}ms, tokens={tokens_used})\n"
+            f"  SYSTEM:\n    {sys_display}\n"
+            f"  USER:\n    {usr_display}\n"
+            f"  RESPONSE ({len(response_text)} chars):\n"
+            f"    {response_text}\n"
+            f"{separator}"
+        )
+        self._log(logging.INFO, block)
+
+    def content_log(self, label: str, text: str, max_len: int = 0):
+        """Log a labeled piece of content. max_len=0 means no truncation."""
+        display = text if (max_len == 0 or len(text) <= max_len) else text[:max_len] + "…"
+        self._log(logging.INFO, f"📝 {label}: {display}")
 
     def cache_hit(self, query: str, tools: list):
         self._log(logging.INFO,

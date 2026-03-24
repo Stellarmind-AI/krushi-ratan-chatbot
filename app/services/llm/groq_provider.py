@@ -72,6 +72,18 @@ class GroqProvider(BaseLLMProvider):
             tokens_used = None
             if hasattr(response, 'usage') and response.usage:
                 tokens_used = response.usage.total_tokens
+
+            # Print full I/O for debugging — skip health check calls (max_tokens<=5)
+            if not (max_tokens and max_tokens <= 5):
+                _sys = next((m.content for m in messages if m.role == "system"), "")
+                _usr = next((m.content for m in messages if m.role == "user"), "")
+                print(f"\n{'═'*60}", flush=True)
+                print(f"🤖 GROQ LLM CALL | {self.model} | tokens={tokens_used}", flush=True)
+                print(f"  SYSTEM: {_sys[:400]}{'…' if len(_sys) > 400 else ''}", flush=True)
+                print(f"  USER:   {_usr[:400]}{'…' if len(_usr) > 400 else ''}", flush=True)
+                print(f"  RESPONSE ({len(content)} chars):", flush=True)
+                print(f"    {content}", flush=True)
+                print(f"{'═'*60}", flush=True)
             
             return LLMResponse(
                 content=content,

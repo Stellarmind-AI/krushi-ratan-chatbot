@@ -80,9 +80,15 @@ async def _translate_with_llm(text: str, target_lang_code: str) -> str:
         )
         translated = response.content.strip()
         logger.info(f"LLM translated en→{target_lang_code} | {len(text)} chars → {len(translated)} chars")
+        print(f"\n{'─'*60}", flush=True)
+        print(f"🌐 LLM TRANSLATION en→{target_lang_code}", flush=True)
+        print(f"  INPUT:  {text}", flush=True)
+        print(f"  OUTPUT: {translated}", flush=True)
+        print(f"{'─'*60}", flush=True)
         return translated
     except Exception as e:
         logger.warning(f"LLM translation failed: {e} — returning original text")
+        print(f"  ❌ LLM TRANSLATION FAILED: {e} — returning original", flush=True)
         return text
 
 
@@ -134,9 +140,15 @@ async def _translate_list_with_llm(items: List[str], target_lang_code: str) -> L
         # Safety: if parse failed, return originals
         if len(translated_items) != len(items):
             logger.warning(f"LLM list translation count mismatch {len(items)} vs {len(translated_items)} — using originals")
+            print(f"  ⚠️ LIST TRANSLATE MISMATCH: expected {len(items)}, got {len(translated_items)}", flush=True)
             return items
 
         logger.info(f"LLM translated {len(items)} option labels en→{target_lang_code}")
+        print(f"\n{'─'*60}", flush=True)
+        print(f"🌐 LLM LIST TRANSLATION en→{target_lang_code} ({len(items)} items)", flush=True)
+        for i, (orig, trans) in enumerate(zip(items, translated_items)):
+            print(f"  {i+1}. {orig!r} → {trans!r}", flush=True)
+        print(f"{'─'*60}", flush=True)
         return translated_items
 
     except Exception as e:
@@ -166,6 +178,11 @@ async def _translate_with_google(text: str, target_lang: str, api_key: str) -> O
             )
             if translated:
                 logger.info(f"Google translated en→{target_lang} | {len(text)} → {len(translated)} chars")
+                print(f"\n{'─'*60}", flush=True)
+                print(f"🌐 GOOGLE TRANSLATION en→{target_lang}", flush=True)
+                print(f"  INPUT:  {text}", flush=True)
+                print(f"  OUTPUT: {translated}", flush=True)
+                print(f"{'─'*60}", flush=True)
             return translated
     except httpx.TimeoutException:
         logger.warning("Google Translate: timeout")
@@ -190,6 +207,11 @@ async def _translate_list_with_google(items: List[str], target_lang: str, api_ke
             translations = data.get("data", {}).get("translations", [])
             result = [t.get("translatedText", items[i]) for i, t in enumerate(translations)]
             if len(result) == len(items):
+                print(f"\n{'─'*60}", flush=True)
+                print(f"🌐 GOOGLE LIST TRANSLATION en→{target_lang} ({len(items)} items)", flush=True)
+                for i, (orig, trans) in enumerate(zip(items, result)):
+                    print(f"  {i+1}. {orig!r} → {trans!r}", flush=True)
+                print(f"{'─'*60}", flush=True)
                 return result
     except Exception as e:
         logger.warning(f"Google Translate list failed: {e}")
@@ -215,9 +237,16 @@ async def translate_to_user_language(text: str, lang_type: str) -> str:
     """
     target_lang = _LANG_TYPE_TO_GOOGLE.get(lang_type)
     if not target_lang:
+        print(f"🌐 TRANSLATE SKIPPED — lang_type={lang_type} (English, no translation needed)", flush=True)
         return text   # English — no translation needed
     if not text or not text.strip():
         return text
+
+    print(f"\n{'='*60}", flush=True)
+    print(f"🌐 TRANSLATE TO USER LANGUAGE: {lang_type} → {target_lang}", flush=True)
+    print(f"  📥 ENGLISH INPUT ({len(text)} chars):", flush=True)
+    print(f"    {text}", flush=True)
+    print(f"{'='*60}", flush=True)
 
     api_key = getattr(settings, "GOOGLE_TRANSLATE_API_KEY", None)
 
@@ -242,9 +271,16 @@ async def translate_list_to_user_language(items: List[str], lang_type: str) -> L
     """
     target_lang = _LANG_TYPE_TO_GOOGLE.get(lang_type)
     if not target_lang:
+        print(f"🌐 LIST TRANSLATE SKIPPED — lang_type={lang_type} (English)", flush=True)
         return items   # English — no translation needed
     if not items:
         return items
+
+    print(f"\n{'='*60}", flush=True)
+    print(f"🌐 TRANSLATE LIST: {lang_type} → {target_lang} ({len(items)} items)", flush=True)
+    for i, item in enumerate(items):
+        print(f"  📥 [{i+1}]: {item}", flush=True)
+    print(f"{'='*60}", flush=True)
 
     api_key = getattr(settings, "GOOGLE_TRANSLATE_API_KEY", None)
 
