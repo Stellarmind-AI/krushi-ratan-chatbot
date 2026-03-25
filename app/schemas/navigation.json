@@ -549,7 +549,7 @@
       ],
       "screen": "Register / Create Account",
       "description": "How to create a new Krushi Ratn account",
-      "how_to_use": "Step 1: Open the KrushiRatn app.\nStep 2: Select the role you want to create an account for (Farmer / Company / Video Creator).\nStep 3: Enter your name and mobile number.\nStep 4: Fill in location and other required details.\nStep 5: Enter OTP.\nStep 6: Click the 'Submit' button."
+      "how_to_use": "Step 1: Open the Krushi Ratn app.\nStep 2: Tap 'Register'.\nStep 3: Enter your mobile number.\nStep 4: Enter the OTP sent to your phone.\nStep 5: Fill in your details and tap 'Create Account'."
     },
     {
       "id": "nav_ai_chatbot",

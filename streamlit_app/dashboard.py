@@ -8,12 +8,17 @@ Streamlit Dashboard — Krushi Node AI Chatbot
 import html
 import streamlit as st
 import asyncio
+import os
 import websockets
 import json
 import base64
 import uuid
 from datetime import datetime
 from audio_recorder_streamlit import audio_recorder
+from dotenv import load_dotenv
+
+# Load .env file so WS_CHAT_URL and HEALTH_CHECK_URL are available
+load_dotenv()
 
 st.set_page_config(
     page_title="Krushi Node — AI Chatbot",
@@ -195,7 +200,7 @@ div[data-testid="stButton"] > button {
 def _init():
     defaults = {
         "chat_history":          [],
-        "ws_url":                "ws://localhost:8002/ws/chat",
+        "ws_url":                "wss://test-ai.krushiratn.com/ws/chat",
         "processing":            False,
         "session_id":            str(uuid.uuid4()),
         "pending_clarification": None,
@@ -474,9 +479,10 @@ with st.sidebar:
     st.header("⚙️ Settings")
 
     st.subheader("Server Status")
+    _health_url = os.environ.get("HEALTH_CHECK_URL", "http://localhost:8002/health")
     try:
         import requests as _req
-        r = _req.get("http://localhost:8002/health", timeout=3)
+        r = _req.get(_health_url, timeout=3)
         if r.status_code == 200:
             st.success("✅ Connected")
         else:
