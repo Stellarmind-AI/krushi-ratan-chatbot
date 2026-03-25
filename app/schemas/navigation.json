@@ -191,7 +191,7 @@
       ],
       "screen": "Crop Sell",
       "description": "How a farmer can sell their crop through Krushi Ratn",
-      "how_to_use": "Step 1 – Select Crop:\n• Go to Krushi Ratn farmer role.\n• Click on 'Crop Sell' tab.\n• Select the crop you want to sell.\n\nStep 2 – Check Market Price:\n• You will see the Market Yard reference price.\n• This helps you decide your selling price.\n• Click 'Proceed to Sell'.\n\nStep 3 – Fill Sales Form:\n• Enter estimated weight.\n• Select storage time.\n• Upload 2 images and 1 video.\n• Click Submit.",
+      "how_to_use": "Step 1 – Select Crop:\n• Go to Krushi Ratn farmer role.\n• Click on 'Crop Sell' tab.\n• Select the crop you want to sell.\n\nStep 2 – Check Market Price:\n• You will see the Market Yard reference price.\n• This helps you decide your selling price.\n• Click 'Proceed to Sell'.\n\nStep 3 – Fill Sales Form:\n• Enter estimated weight.\n• Select storage time.\n• Upload 2 images and 1 video.\n• Click Submit.\n\nStep 4 – Receive Buyer Offers:\n• After submission, companies/buyers will send you price offers.\n• You will see all offers with the buyer name and offered price.\n• Wait for offers to come in — this may take some time.\n\nStep 5 – Select a Buyer:\n• Compare the offered prices from different buyers.\n• Tap on the offer you want to accept.\n• Click 'Confirm Sell' to accept that buyer's offer.\n\nStep 6 – Order Complete:\n• Once confirmed, the crop order is placed.\n• You will see the order status in your orders section.\n• The buyer will arrange pickup/delivery.",
       "how_price_works": "After you submit your crop:\n• It becomes visible in company accounts.\n• Multiple buyers (companies) will review your crop.\n• Each company will offer their own price.\n• You can compare all offers.",
       "buyer_offer_flow": "1. You will see a list of buyers.\n2. Each buyer shows: Offered Price, Buyer Name, Company Details.\n3. Select any one buyer.\n4. Click 'Confirm Sell' to proceed.\n\nAfter confirmation:\nBuyer contacts farmer → Pickup and Delivery → Direct Payment → Order Completed."
     },
@@ -352,7 +352,7 @@
       ],
       "screen": "Buy/Sell — View Completed Orders (Seller)",
       "description": "How to see your completed sell orders",
-      "how_to_use": "Step 1: Click on 'My Orders'.\nStep 2: Click on 'Buy Sell'.\nStep 3: Click on 'In Completed Order'."
+      "how_to_use": "Step 1: Click on the 'Buy Sell' tab.\nStep 2: Click on the 'Sell' section.\nStep 3: Look for 'Completed Orders' or 'Order History' section.\nStep 4: You will see all your products that have been sold.\nStep 5: Tap on any completed order to see full details."
     },
     {
       "id": "nav_buysell_edit_listing",
@@ -549,7 +549,7 @@
       ],
       "screen": "Register / Create Account",
       "description": "How to create a new Krushi Ratn account",
-      "how_to_use": "Step 1: Open the Krushi Ratn app.\nStep 2: Tap 'Register'.\nStep 3: Enter your mobile number.\nStep 4: Enter the OTP sent to your phone.\nStep 5: Fill in your details and tap 'Create Account'."
+      "how_to_use": "Step 1: Open the KrushiRatn app.\nStep 2: Select the role you want to create an account for (Farmer / Company / Video Creator).\nStep 3: Enter your name and mobile number.\nStep 4: Fill in location and other required details.\nStep 5: Enter OTP.\nStep 6: Click the 'Submit' button."
     },
     {
       "id": "nav_ai_chatbot",
@@ -857,6 +857,102 @@
       "screen": "Home — Check Mandi / Yard Prices",
       "description": "How to check market yard crop prices in the Krushi Ratn app",
       "how_to_use": "Step 1: Open the Krushi Ratn app.\nStep 2: On the Home Screen, tap on the 'Mandi Bhav' or 'Yard Price' section.\nStep 3: Select your state and district.\nStep 4: Select the market yard (mandi) nearest to you.\nStep 5: View the latest crop prices listed for that yard."
+    },
+    {
+      "id": "nav_app_login",
+      "tags": [
+        "login",
+        "log in",
+        "sign in",
+        "signin",
+        "app login",
+        "how to login",
+        "login kevi rite",
+        "app ma login",
+        "login karvu",
+        "sign in karvu",
+        "app open",
+        "લોગિન",
+        "લોગ ઇન",
+        "સાઇન ઇન",
+        "એપમાં લોગિન",
+        "લોગિન કેવી રીતે",
+        "લોગિન કરવું",
+        "એપ ખોલવું"
+      ],
+      "screen": "App Login",
+      "description": "How to log in or register on the Krushi Ratn app",
+      "how_to_use": "Step 1: Open the KrushiRatn app.\nStep 2: Select the role you want to create an account for (Farmer / Company / Video Creator).\nStep 3: Enter your name and mobile number.\nStep 4: Fill in location and other required details.\nStep 5: Enter OTP.\nStep 6: Click the 'Submit' button."
+    },
+    {
+      "id": "nav_app_logout",
+      "tags": [
+        "logout",
+        "log out",
+        "sign out",
+        "signout",
+        "app logout",
+        "how to logout",
+        "logout kevi rite",
+        "app mathithi logout",
+        "logout karvu",
+        "sign out karvu",
+        "લોગઆઉટ",
+        "લોગ આઉટ",
+        "સાઇન આઉટ",
+        "એપમાંથી લોગઆઉટ",
+        "લોગઆઉટ કેવી રીતે",
+        "લોગઆઉટ કરવું",
+        "સાઇન આઉટ કેવી રીતે"
+      ],
+      "screen": "App Logout",
+      "description": "How to log out from the Krushi Ratn app",
+      "how_to_use": "Step 1: Open the Krushi Ratn app.\nStep 2: Click on the Profile icon (top left corner).\nStep 3: Click on the 'Logout' button.\nStep 4: Confirm logout in the popup.\nStep 5: You are now logged out of the app."
+    },
+    {
+      "id": "nav_delete_account",
+      "tags": [
+        "delete account",
+        "account delete",
+        "remove account",
+        "delete my account",
+        "account remove",
+        "account hatavu",
+        "delete kevi rite",
+        "account delete karvu",
+        "એકાઉન્ટ ડિલીટ",
+        "ડિલીટ એકાઉન્ટ",
+        "એકાઉન્ટ કાઢવું",
+        "એકાઉન્ટ ડિલીટ કેવી રીતે",
+        "મારું એકાઉન્ટ ડિલીટ",
+        "એકાઉન્ટ રદ",
+        "એકાઉન્ટ બંધ"
+      ],
+      "screen": "Profile — Delete Account",
+      "description": "How to delete your Krushi Ratn account",
+      "how_to_use": "Step 1: Open the Krushi Ratn app and click on the Profile photo (top left corner).\nStep 2: Click on the 'Logout' button.\nStep 3: In the Logout popup, click on the 'Delete Account' option.\nStep 4: Select 'Delete Account' to confirm and delete your account."
+    },
+    {
+      "id": "nav_crop_price_determination",
+      "tags": [
+        "price determination",
+        "how price decided",
+        "bhav kevi rite naki thay",
+        "price after submit",
+        "crop price offer",
+        "buyer price offer",
+        "ભાવ કેવી રીતે નક્કી",
+        "ભાવ નક્કી",
+        "ભાવ કેવી રીતે નક્કી થાય",
+        "પાક સબમિટ પછી ભાવ",
+        "ખરીદદાર ભાવ",
+        "ઓફર ભાવ",
+        "ભાવ કેવી રીતે આવે",
+        "કિંમત કેવી રીતે નક્કી"
+      ],
+      "screen": "Crop Sell — Price Determination",
+      "description": "How the crop price is decided after submission on Krushi Ratn",
+      "how_to_use": "Step 1: After you submit your crop for sale, your listing becomes visible to companies and buyers.\nStep 2: Interested buyers/companies will send you price offers.\nStep 3: You can see all offers with the buyer name and their offered price.\nStep 4: The Market Yard reference price is shown for comparison.\nStep 5: You compare offers and choose the best price.\nStep 6: Tap on the offer you want to accept and click 'Confirm Sell'.\nStep 7: The final price is the offer you accepted — you are in control of which buyer to sell to."
     }
   ]
 }

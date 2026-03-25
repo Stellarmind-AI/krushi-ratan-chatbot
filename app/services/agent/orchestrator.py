@@ -121,6 +121,7 @@ class Orchestrator:
         target_language: Optional[str] = None,   # kept for API compat, NOT used for LLM
         confirmed_intent: Optional[str] = None,  # F1: set when user picked a clarification option
         keyword_hint: str = "",                  # F1: matched keyword for targeted SQL generation
+        force_navigation: bool = False,          # Nav signal detected — skip route agent
     ) -> Dict[str, Any]:
         """
         Process user query through route agent → correct flow.
@@ -133,10 +134,16 @@ class Orchestrator:
         intent_key here.  This causes _flow_sql to skip LLM tool-selection and use
         the pre-resolved table list directly.
 
+        force_navigation — when the F1 nav signal detector found navigation patterns
+        (કેવી રીતે, પગલાં, steps to, etc.), this forces NAVIGATION flow and skips
+        the route agent entirely.  Prevents the route agent from mis-classifying
+        navigation questions as SQL (e.g. "મારા ઓર્ડર ક્યાં છે?" → SQL).
+
         Returns dict with keys: answer, sources, query_results, selected_tools,
                                 flow, cache_hit
         """
         pipeline_start = time.perf_counter()
+        logger.pipeline_start(user_query)
 
         try:
             # ── STEP 1: Route Agent ─────────────────────────────────────────
@@ -156,6 +163,18 @@ class Orchestrator:
                 result["flow"] = "SQL"
                 total_ms = (time.perf_counter() - pipeline_start) * 1000
                 logger.pipeline_end("SQL", total_ms, cached=result.get("cache_hit", False))
+                return result
+
+            if force_navigation:
+                logger.step(
+                    "STEP 1 / ROUTE AGENT",
+                    "SKIPPED — nav signal detected, forcing NAVIGATION flow",
+                )
+                logger.step_done("STEP 1 / ROUTE AGENT", 0, flow="NAVIGATION", reason="nav_signal")
+                result = await self._flow_navigation(user_query)
+                result["flow"] = "NAVIGATION"
+                total_ms = (time.perf_counter() - pipeline_start) * 1000
+                logger.pipeline_end("NAVIGATION", total_ms)
                 return result
 
             logger.step("STEP 1 / ROUTE AGENT", "Classifying question")

@@ -40,6 +40,9 @@ _NAV_SIGNALS: List[str] = [
     "how to", "how do i", "how can i", "step by step", "steps to",
     "where to find", "where is", "how do", "guide", "tutorial for",
     "set up", "setup", "configure", "enable", "activate",
+    "what are the steps", "steps for", "process for", "process to",
+    "instructions for", "instructions to", "procedure for",
+    "what steps", "steps to follow", "what to do to",
     # English — switch role (nav_switch_role)
     "switch account", "switch role", "role change", "farmer company switch",
     "change role", "account switch",
@@ -57,13 +60,38 @@ _NAV_SIGNALS: List[str] = [
     "mate shu", "kevi rite karvanu", "kevi rite karu",
     "kevi rite set", "kevi rite nokhi", "kevi rite muku",
     "mate kevi", "keva step", "process shu", "kevi rite thay",
-    # Gujarati script — generic how-to
+    # Romanized Gujarati — EXPANDED patterns
+    "kem karvu", "kem karvun", "kem karu", "kem kholvu",
+    "kem mukvun", "kem muku", "kem jovu", "kem badlvu",
+    "paglan", "pagla", "steps shu", "rit shu",
+    "track karvu", "cancel karvu", "register karvu",
+    "kyay jovu", "kyay male", "kyay joiye",
+    # Gujarati script — generic how-to (COMPREHENSIVE)
     "કેવી રીતે", "કઈ રીતે", "કેવી રીત", "સ્ટેપ્સ",
     "ક્યાં મળશે", "ક્યાં છે", "કેવી રીતે કરવું", "સેટ કરવું",
     "કેવી રીતે સેટ", "કેવી રીતે ચાલુ", "કેવી રીતે ઉપયોગ",
     "કેવી રીતે ખરીદ", "કેવી રીતે વેચ", "કેવી રીતે નોંધ",
     "કેવી રીતે મૂક", "કેવી રીતે ચેક", "કેવી રીતે ઉમેર",
     "શીખો", "ગાઇડ", "પ્રક્રિયા",
+    # Gujarati script — EXPANDED "how" patterns (કેમ = colloquial "how")
+    "કેમ કરવું", "કેમ કરવો", "કેમ કરવી",
+    "કેમ ખોલવું", "કેમ મૂકવું", "કેમ મૂકવી",
+    "કેમ જોવું", "કેમ બદલવું", "કેમ બનાવવું",
+    # Gujarati script — EXPANDED "steps/method" patterns
+    "પગલાં", "કયા પગલાં", "માટેના પગલાં", "માટેના સ્ટેપ્સ",
+    "રીત શું", "શું રીત", "રીત જણાવો", "રીત બતાવો",
+    "શું કરવું", "શું કરવો", "શું કરવી",
+    "માર્ગદર્શન", "તરીકો", "તરીકા",
+    "અનુસરવા", "અનુસરો",
+    # Gujarati script — EXPANDED "where to see/find" patterns
+    "ક્યાં જોવા", "ક્યાં જોવું", "ક્યાં મળે",
+    "ક્યાં જોવા મળે", "ક્યાં મળશે",
+    "ક્યાંથી", "ક્યાં થી",
+    # Gujarati script — EXPANDED action patterns
+    "ટ્રેક કરવો", "ટ્રેક કરવું",
+    "રદ કરવો", "રદ કરવું", "કેન્સલ કરવો", "કેન્સલ કરવું",
+    "બદલવું", "બદલવી", "બદલવો",
+    "અપડેટ કરવું", "અપડેટ કરવો",
     # Gujarati script — switch role (nav_switch_role)
     "ભૂમિકા સ્વિચ", "સ્વિચ એકાઉન્ટ", "ભૂમિકા બદલો",
     # Gujarati script — video creator / upload (nav_video_create, nav_video_upload)

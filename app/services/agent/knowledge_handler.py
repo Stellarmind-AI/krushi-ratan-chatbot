@@ -266,65 +266,92 @@ class KnowledgeHandler:
         """
         Answer a NAVIGATION question using navigation.json.
 
-        Process:
-          1. Auto-reload if navigation.json was modified on disk
-          2. Score all navigation flow entries against the question
-          3. Pick top 3 matches
-          4. LLM composes a clear English answer from matched content
-          5. Return English string (caller translates to Gujarati)
+        DESIGN: Single LLM call with ALL navigation entries as context.
+        The LLM reads every entry's screen name, description, and steps,
+        then directly answers the user's question.
+
+        WHY ONE CALL (not select → compose):
+          - Keyword scoring fails for Gujarati (shared words across entries)
+          - LLM selection + LLM compose = two points of failure
+          - All 24 entries fit in ~1900 tokens — cheaper than two separate calls
+          - ONE call = zero chance of "right entry selected, wrong answer composed"
+          - Works for ANY language, ANY phrasing, with ZERO keyword maintenance
+
+        COST: ~2000 tokens input + ~200 output = ~2200 tokens total
+              vs old approach: ~700 (selector) + ~400 (composer) = ~1100 tokens
+              Difference: +1100 tokens per nav query (~$0.00 at Groq free tier)
+              But: 1 LLM round-trip instead of 2 → ~300ms faster
         """
         logger.step("NAVIGATION HANDLER", f"Looking up: {question[:70]}")
 
         # Auto-reload if file changed
         self._check_and_reload()
 
-        if not self._nav_loaded:
+        if not self._nav_loaded or not self._nav_flows:
             logger.warning("Navigation data not loaded — returning fallback")
             return self._nav_fallback()
 
-        with Timer() as t:
-            matches = _find_top_matches(self._nav_flows, question, top_n=5)
-        logger.step_done("NAV SCORING", t.elapsed_ms, matches_found=len(matches))
+        # Build full context with ALL navigation entries
+        context = self._format_nav_context(self._nav_flows)
+        logger.info(f"NAV: sending all {len(self._nav_flows)} entries to single LLM call ({len(context)} chars)")
 
-        # If keyword scoring found strong matches (top score >= 4.0), use them.
-        # Otherwise, send ALL entries to the LLM — keyword scoring fails for
-        # Gujarati queries where tags don't substring-match due to word order.
-        # With ~21 entries this costs only ~300 extra tokens.
-        top_score = matches[0][1] if matches else 0.0
-        if top_score >= 4.0:
-            candidates = matches
-            logger.info(f"NAV: strong keyword match (score={top_score:.1f}) — using top {len(matches)}")
-        else:
-            # Weak/no keyword match — let LLM see all entries
-            candidates = [(e, 0.0) for e in self._nav_flows]
-            logger.info(f"NAV: weak keyword match (score={top_score:.1f}) — sending all {len(candidates)} entries to LLM")
+        system = (
+            "You are a navigation assistant for the Krushi Ratn agricultural app.\n"
+            "Below is a complete list of ALL app screens with step-by-step instructions.\n"
+            "The user will ask a question in English, Gujarati, or Romanized Gujarati.\n\n"
+            "YOUR JOB:\n"
+            "1. Find the screen that BEST matches the user's question.\n"
+            "2. Output ONLY the exact steps from that screen's 'How to use' field.\n"
+            "3. Do NOT mix steps from different screens.\n"
+            "4. Do NOT add intro sentences, tips, or explanations not in the source.\n"
+            "5. Do NOT add a closing line like 'Let me know if you need help'.\n"
+            "6. If NO screen matches, say: 'I don't have navigation steps for this. "
+            "Please explore the app's main menu or contact support through Profile → Help & Support.'\n"
+            "7. Answer in ENGLISH only — translation is handled separately."
+        )
 
-        if not candidates:
-            logger.no_data_found("NAVIGATION", question)
-            logger.info("NAV: no entries at all — trying SQL fallback once")
-            sql_answer = await self._sql_fallback(question)
-            if sql_answer:
-                return sql_answer
+        user_message = (
+            f"User Question: {question}\n\n"
+            f"ALL APP SCREENS AND STEPS:\n{context}\n\n"
+            f"Find the best matching screen and output its exact steps."
+        )
+
+        messages = [
+            LLMMessage(role="system", content=system),
+            LLMMessage(role="user",   content=user_message),
+        ]
+
+        logger.llm_call_start(1, "NAVIGATION_answer",
+                              provider=self.llm_manager.current_provider,
+                              est_tokens=len(context) // 4 + 200)
+        try:
+            with Timer() as t:
+                response = await self.llm_manager.generate(
+                    messages=messages,
+                    temperature=0.1,
+                    max_tokens=600,
+                )
+            logger.llm_call_done(1, "NAVIGATION_answer", t.elapsed_ms,
+                                 tokens_used=response.tokens_used or 0)
+
+            answer = response.content.strip()
+
+            # If LLM says "no match", try SQL fallback
+            no_match_signals = ["don't have navigation", "no screen matches",
+                                "not available", "cannot find"]
+            if any(sig in answer.lower() for sig in no_match_signals):
+                logger.info("NAV: LLM found no matching screen — trying SQL fallback")
+                sql_answer = await self._sql_fallback(question)
+                if sql_answer:
+                    return sql_answer
+                return self._nav_fallback()
+
+            logger.final_answer(answer, lang="en")
+            return answer
+
+        except Exception as e:
+            logger.error_with_context(e, {"action": "nav_answer", "query": question[:100]})
             return self._nav_fallback()
-
-        for entry, score in matches[:5]:  # log top keyword matches for debugging
-            logger.json_lookup("NAVIGATION", entry.get("id", "?"), score)
-
-        # LLM picks the best entry — handles ALL languages natively
-        best_entries = await self._llm_select_best(question, candidates, flow="NAVIGATION")
-
-        # LLM said "no entry matches" → try SQL fallback, then generic fallback
-        if not best_entries:
-            logger.info("NAV: LLM found no matching entry — trying SQL fallback once")
-            sql_answer = await self._sql_fallback(question)
-            if sql_answer:
-                return sql_answer
-            return self._nav_fallback()
-
-        context = self._format_nav_context(best_entries)
-        answer  = await self._compose_answer(question, context, flow="NAVIGATION")
-        logger.final_answer(answer, lang="en")
-        return answer
 
     async def answer_general(self, question: str) -> str:
         """
@@ -640,6 +667,10 @@ class KnowledgeHandler:
             no_data = [
                 "couldn't find", "no information", "not available",
                 "no data", "not found", "cannot find",
+                "no active listings", "no products matching", "no listings",
+                "no products found", "no results", "no matching",
+                "no recent price", "not in our database",
+                "may not be available", "nothing was found",
             ]
             if answer and not any(p in answer.lower() for p in no_data):
                 logger.info("SQL fallback succeeded for NAV/GEN question")
