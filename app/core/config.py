@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = Field(default="development", description="Environment (development/production)")
     
     # ================================
+    # FEATURE FLAGS
+    # ================================
+    # SQL flow: database queries for prices, products, orders, etc.
+    # "false" = bot only answers NAVIGATION + GENERAL + GREETING
+    # "true"  = bot also queries the database for live data
+    # To enable later: set ENABLE_SQL_FLOW=true in .env and restart
+    ENABLE_SQL_FLOW: str = Field(default="false", description="Enable SQL database query flow (true/false)")
+    
+    # ================================
     # RATE LIMITING CONFIGURATION
     # ================================
     GROQ_RPM_LIMIT: int = Field(default=30, description="Groq requests per minute")

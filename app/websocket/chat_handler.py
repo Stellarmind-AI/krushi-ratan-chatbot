@@ -20,6 +20,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from datetime import datetime
 
 from app.core.logger import get_logger, get_websocket_logger, Timer
+from app.core.config import settings
 from app.models.chat_models import ChatHistory, ChatMessage
 from app.services.agent.orchestrator import get_orchestrator
 from app.services.language_processor import get_language_processor
@@ -204,11 +205,13 @@ class ChatHandler:
 
         # ── F1: Confirmation Layer ───────────────────────────────────────────
         # Only runs on the FIRST pass (confirmed_intent is None).
+        # SKIPPED when SQL flow is disabled — F1 only disambiguates SQL intents.
         # Returns one of:
         #   ConfirmedIntent      → confidence >= 80%, inject intent and skip F1 UI
         #   ClarificationRequest → confidence < 80%, pause and ask user
         #   None                 → no ambiguity, proceed normally
-        if not confirmed_intent:
+        _sql_enabled = settings.ENABLE_SQL_FLOW.lower() == 'true'
+        if not confirmed_intent and _sql_enabled:
             f1_result = self.confirmation_layer.check(processed_text)
 
             if isinstance(f1_result, ConfirmedIntent):

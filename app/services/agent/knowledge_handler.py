@@ -305,8 +305,10 @@ class KnowledgeHandler:
             "3. Do NOT mix steps from different screens.\n"
             "4. Do NOT add intro sentences, tips, or explanations not in the source.\n"
             "5. Do NOT add a closing line like 'Let me know if you need help'.\n"
-            "6. If NO screen matches, say: 'I don't have navigation steps for this. "
-            "Please explore the app's main menu or contact support through Profile → Help & Support.'\n"
+            "6. If NO screen matches, say exactly: 'This information is not yet included in the Krushi Ratn AI chatbot. "
+            "It will be available for you soon! "
+            "Until then, I can help you with app navigation and understanding the app features. "
+            "If you still need help, contact support through Profile → Help & Support.'\n"
             "7. Answer in ENGLISH only — translation is handled separately."
         )
 
@@ -336,14 +338,11 @@ class KnowledgeHandler:
 
             answer = response.content.strip()
 
-            # If LLM says "no match", try SQL fallback
-            no_match_signals = ["don't have navigation", "no screen matches",
-                                "not available", "cannot find"]
+            # If LLM says "no match", return universal fallback
+            no_match_signals = ["not yet included", "don't have navigation",
+                                "no screen matches", "not available", "cannot find"]
             if any(sig in answer.lower() for sig in no_match_signals):
-                logger.info("NAV: LLM found no matching screen — trying SQL fallback")
-                sql_answer = await self._sql_fallback(question)
-                if sql_answer:
-                    return sql_answer
+                logger.info("NAV: LLM found no matching screen — returning fallback")
                 return self._nav_fallback()
 
             logger.final_answer(answer, lang="en")
@@ -388,10 +387,6 @@ class KnowledgeHandler:
 
         if not candidates:
             logger.no_data_found("GENERAL", question)
-            logger.info("GEN: no entries at all — trying SQL fallback once")
-            sql_answer = await self._sql_fallback(question)
-            if sql_answer:
-                return sql_answer
             return self._gen_fallback()
 
         for entry, score in matches[:5]:
@@ -400,12 +395,9 @@ class KnowledgeHandler:
         # LLM picks the best entry — handles ALL languages natively
         best_entries = await self._llm_select_best(question, candidates, flow="GENERAL")
 
-        # LLM said "no entry matches" → try SQL fallback, then generic fallback
+        # LLM said "no entry matches" → return universal fallback
         if not best_entries:
-            logger.info("GEN: LLM found no matching entry — trying SQL fallback once")
-            sql_answer = await self._sql_fallback(question)
-            if sql_answer:
-                return sql_answer
+            logger.info("GEN: LLM found no matching entry — returning fallback")
             return self._gen_fallback()
 
         context = self._format_gen_context(best_entries)
@@ -659,7 +651,16 @@ class KnowledgeHandler:
         When NAV or GENERAL has no matching entry, try SQL pipeline directly.
         Bypasses route agent to avoid infinite recursion.
         Returns answer string if SQL found data, else None.
+
+        DISABLED when ENABLE_SQL_FLOW != true (no DB queries in current release).
         """
+        # Check if SQL flow is enabled
+        from app.core.config import settings
+        _sql_enabled = getattr(settings, 'ENABLE_SQL_FLOW', 'false').lower() == 'true'
+        if not _sql_enabled:
+            logger.info("SQL fallback SKIPPED — ENABLE_SQL_FLOW is false")
+            return None
+
         try:
             orchestrator = _get_orchestrator()
             result  = await orchestrator._flow_sql(question)
@@ -683,21 +684,19 @@ class KnowledgeHandler:
     @staticmethod
     def _nav_fallback() -> str:
         return (
-            "I couldn't find specific navigation instructions for your question. "
-            "Please explore the app's main menu — you'll find K-Shop, Mandi Bhav, "
-            "Videos, News, and Buy/Sell sections on the Home screen. "
-            "You can also go to Profile for account settings. "
+            "This information is not yet included in the Krushi Ratn AI chatbot. "
+            "It will be available for you soon! "
+            "Until then, I can help you with app navigation and understanding the app features. "
             "If you still need help, contact support through Profile → Help & Support."
         )
 
     @staticmethod
     def _gen_fallback() -> str:
         return (
-            "Krushi Ratn is a free agricultural marketplace app for Gujarat farmers. "
-            "It provides crop market prices (mandi bhav), K-Shop for buying agricultural "
-            "products, a buy/sell marketplace between farmers, educational farming videos, "
-            "and agricultural news. "
-            "Please ask me a specific question about any of these features."
+            "This information is not yet included in the Krushi Ratn AI chatbot. "
+            "It will be available for you soon! "
+            "Until then, I can help you with app navigation and understanding the app features. "
+            "If you still need help, contact support through Profile → Help & Support."
         )
 
 

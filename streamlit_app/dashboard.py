@@ -14,11 +14,54 @@ import json
 import base64
 import uuid
 from datetime import datetime
+from urllib.parse import urlparse, urlunparse
 from audio_recorder_streamlit import audio_recorder
 from dotenv import load_dotenv
 
-# Load .env file so WS_CHAT_URL and HEALTH_CHECK_URL are available
+# Load .env file so deployment overrides are available during local runs.
 load_dotenv()
+
+
+def _get_runtime_setting(name: str) -> str:
+    """Read config from env first, then Streamlit secrets when available."""
+    value = os.environ.get(name)
+    if value:
+        return value.strip()
+    try:
+        secret_value = st.secrets.get(name)
+    except Exception:
+        secret_value = None
+    return str(secret_value).strip() if secret_value is not None else ""
+
+
+def _normalized_backend_host() -> str:
+    host = _get_runtime_setting("APP_HOST") or "localhost"
+    return "localhost" if host == "0.0.0.0" else host
+
+
+def _resolve_health_check_url() -> str:
+    configured_url = _get_runtime_setting("HEALTH_CHECK_URL")
+    if configured_url:
+        return configured_url
+
+    app_port = _get_runtime_setting("APP_PORT") or "8000"
+    return f"http://{_normalized_backend_host()}:{app_port}/health"
+
+
+def _resolve_ws_url() -> str:
+    configured_url = _get_runtime_setting("WS_CHAT_URL")
+    if configured_url:
+        return configured_url
+
+    health_url = _get_runtime_setting("HEALTH_CHECK_URL")
+    if health_url:
+        parsed = urlparse(health_url)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+            return urlunparse((ws_scheme, parsed.netloc, "/ws/chat", "", "", ""))
+
+    app_port = _get_runtime_setting("APP_PORT") or "8000"
+    return f"ws://{_normalized_backend_host()}:{app_port}/ws/chat"
 
 st.set_page_config(
     page_title="Krushi Node — AI Chatbot",
@@ -200,7 +243,6 @@ div[data-testid="stButton"] > button {
 def _init():
     defaults = {
         "chat_history":          [],
-        "ws_url":                "wss://test-ai.krushiratn.com/ws/chat",
         "processing":            False,
         "session_id":            str(uuid.uuid4()),
         "pending_clarification": None,
@@ -211,6 +253,9 @@ def _init():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+    # Keep backend endpoints in sync with the current runtime config.
+    st.session_state.ws_url = _resolve_ws_url()
+    st.session_state.health_check_url = _resolve_health_check_url()
 
 _init()
 
@@ -479,16 +524,16 @@ with st.sidebar:
     st.header("⚙️ Settings")
 
     st.subheader("Server Status")
-    _health_url = os.environ.get("HEALTH_CHECK_URL", "http://localhost:8002/health")
     try:
         import requests as _req
-        r = _req.get(_health_url, timeout=3)
+        r = _req.get(st.session_state.health_check_url, timeout=3)
         if r.status_code == 200:
             st.success("✅ Connected")
         else:
             st.error("❌ Disconnected")
     except Exception:
         st.error("❌ Server not running")
+    st.caption(f"WS: {st.session_state.ws_url}")
 
     st.divider()
 

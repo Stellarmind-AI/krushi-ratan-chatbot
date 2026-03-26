@@ -32,6 +32,7 @@ from app.utils.schema_generator        import SchemaGenerator
 from app.services.llm.manager          import get_llm_manager
 from app.models.chat_models            import LLMMessage
 from app.core.logger                   import get_agent_logger, Timer
+from app.core.config                   import settings
 
 logger = get_agent_logger()
 
@@ -146,6 +147,21 @@ class Orchestrator:
         logger.pipeline_start(user_query)
 
         try:
+            # ── SQL FLOW DISABLED FOR CURRENT RELEASE ──────────────────────
+            # Database queries are disabled until user data security review
+            # is complete. To re-enable, set ENABLE_SQL_FLOW=true in .env
+            #
+            # When disabled:
+            #   - F1 confirmed_intent (which forces SQL) → redirects to app
+            #   - Route agent classifying as SQL → redirects to app
+            #   - Only NAVIGATION, GENERAL, and GREETING flows are active
+            # ───────────────────────────────────────────────────────────────
+            _sql_enabled = getattr(settings, 'ENABLE_SQL_FLOW', 'false').lower() == 'true'
+
+            if confirmed_intent and not _sql_enabled:
+                logger.info(f"SQL FLOW DISABLED — confirmed_intent='{confirmed_intent}' blocked")
+                return self._sql_disabled_response()
+
             # ── STEP 1: Route Agent ─────────────────────────────────────────
             # When F1 confirmed_intent is already set, the user already answered
             # the clarification question — the intent is definitively SQL data.
@@ -192,7 +208,16 @@ class Orchestrator:
             elif flow == "GENERAL":
                 result = await self._flow_general(user_query)
 
-            else:  # SQL (default)
+            elif not _sql_enabled:
+                # SQL flow disabled — redirect to app
+                logger.info(f"SQL FLOW DISABLED — route agent said SQL, returning redirect")
+                result = self._sql_disabled_response()
+                result["flow"] = "SQL_DISABLED"
+                total_ms = (time.perf_counter() - pipeline_start) * 1000
+                logger.pipeline_end("SQL_DISABLED", total_ms)
+                return result
+
+            else:  # SQL (enabled)
                 result = await self._flow_sql(user_query, confirmed_intent=confirmed_intent, keyword_hint=keyword_hint)
 
             result["flow"] = flow
@@ -702,13 +727,30 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
     def _out_of_scope_response(self) -> Dict[str, Any]:
         return {
             "answer": (
-                "I specialize in Krushi Ratn agricultural marketplace information. "
-                "I can help with K-Shop products, crop market prices, buy/sell listings, "
-                "farming videos, agricultural news, and app navigation. "
-                "Please ask me something related to these topics."
+                "This information is not yet included in the Krushi Ratn AI chatbot. "
+                "It will be available for you soon! "
+                "Until then, I can help you with app navigation and understanding the app features. "
+                "If you still need help, contact support through Profile → Help & Support."
             ),
             "sources": [], "query_results": [], "selected_tools": [],
             "is_out_of_scope": True,
+        }
+
+    def _sql_disabled_response(self) -> Dict[str, Any]:
+        """
+        Response when SQL flow is disabled (ENABLE_SQL_FLOW != true).
+        Used during releases where only NAVIGATION + GENERAL + GREETING are active.
+        To re-enable SQL: set ENABLE_SQL_FLOW=true in .env and restart.
+        """
+        return {
+            "answer": (
+                "This information is not yet included in the Krushi Ratn AI chatbot. "
+                "It will be available for you soon! "
+                "Until then, I can help you with app navigation and understanding the app features. "
+                "If you still need help, contact support through Profile → Help & Support."
+            ),
+            "sources": [], "query_results": [], "selected_tools": [],
+            "flow": "SQL_DISABLED",
         }
 
 
