@@ -232,7 +232,7 @@ class ChatHistory(BaseModel):
 
 class HealthCheckResponse(BaseModel):
     """Health check response."""
-    status: Literal["healthy", "unhealthy"] = Field(..., description="Overall health status")
+    status: Literal["healthy", "degraded", "unhealthy"] = Field(..., description="Overall health status")
     database: bool = Field(..., description="Database connection status")
     llm_primary: bool = Field(..., description="Primary LLM availability")
     llm_fallback: bool = Field(..., description="Fallback LLM availability")

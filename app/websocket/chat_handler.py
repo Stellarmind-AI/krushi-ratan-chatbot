@@ -210,7 +210,7 @@ class ChatHandler:
         #   ConfirmedIntent      → confidence >= 80%, inject intent and skip F1 UI
         #   ClarificationRequest → confidence < 80%, pause and ask user
         #   None                 → no ambiguity, proceed normally
-        _sql_enabled = settings.ENABLE_SQL_FLOW.lower() == 'true'
+        _sql_enabled = settings.is_sql_enabled
         if not confirmed_intent and _sql_enabled:
             f1_result = self.confirmation_layer.check(processed_text)
 

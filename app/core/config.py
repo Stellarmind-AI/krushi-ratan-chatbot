@@ -3,14 +3,20 @@ Core configuration management for the AI Chatbot Backend.
 Loads environment variables and provides application-wide settings.
 """
 
-import os
 from typing import Optional
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, validator
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
     
     # ================================
     # DATABASE CONFIGURATION
@@ -154,14 +160,12 @@ class Settings(BaseSettings):
     def has_deepgram_key(self) -> bool:
         """Check if Deepgram API key is available."""
         return self.DEEPGRAM_API_KEY is not None and len(self.DEEPGRAM_API_KEY) > 0
+
+    @property
+    def is_sql_enabled(self) -> bool:
+        """Normalize SQL feature flag values from env."""
+        return str(self.ENABLE_SQL_FLOW).strip().lower() in {"1", "true", "yes", "on"}
     
-    class Config:
-        """Pydantic configuration."""
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-
-
 # Global settings instance
 settings = Settings()
 

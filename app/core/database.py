@@ -36,10 +36,14 @@ class DatabaseManager:
     def __init__(self):
         self.pool: Optional[aiomysql.Pool] = None
         self._initialized = False
+
+    @property
+    def is_ready(self) -> bool:
+        return self._initialized and self.pool is not None
     
     async def initialize(self):
         """Initialize database connection pool."""
-        if self._initialized:
+        if self.is_ready:
             logger.warning("Database pool already initialized")
             return
         
@@ -118,7 +122,7 @@ class DatabaseManager:
         Get a database connection from the pool.
         Automatically retries on lost-connection errors.
         """
-        if not self._initialized or not self.pool:
+        if not self.is_ready:
             raise RuntimeError("Database pool not initialized. Call initialize() first.")
         
         conn = None
@@ -204,6 +208,8 @@ class DatabaseManager:
         Returns:
             True if database is healthy, False otherwise
         """
+        if not self.is_ready:
+            return False
         try:
             async with self.get_cursor() as cursor:
                 await cursor.execute("SELECT 1")
@@ -215,6 +221,8 @@ class DatabaseManager:
     
     async def get_table_count(self) -> int:
         """Get the total number of tables in the database."""
+        if not self.is_ready:
+            return 0
         try:
             query = """
                 SELECT COUNT(*) as count 
@@ -229,6 +237,8 @@ class DatabaseManager:
     
     async def get_table_names(self) -> list:
         """Get list of all table names in the database."""
+        if not self.is_ready:
+            return []
         try:
             query = """
                 SELECT table_name 

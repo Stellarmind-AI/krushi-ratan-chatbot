@@ -13,14 +13,13 @@ Place at: app/fake_detection_service.py
 """
 import json
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import aiomysql
 from groq import Groq
 
 from app.core.config import settings
-from app.fake_detection_models import CREATE_TABLE_SQL, MIGRATION_SQLS, FakeIdentification
+from app.fake_detection_models import CREATE_TABLE_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +178,14 @@ class FakeDetectionDB:
         self.pool   = None
         self._ready = False
 
+    @property
+    def is_ready(self) -> bool:
+        return self._ready and self.pool is not None
+
+    def _ensure_ready(self):
+        if not self.is_ready:
+            raise RuntimeError("Fake detection database is not available.")
+
     async def init(self):
         """Create pool, ensure table exists, run any pending migrations."""
         if self._ready:
@@ -263,7 +270,8 @@ class FakeDetectionDB:
         if self.pool:
             self.pool.close()
             await self.pool.wait_closed()
-            self._ready = False
+        self.pool = None
+        self._ready = False
 
     # ── INSERT ────────────────────────────────────────────────────────────────
     async def insert(
@@ -278,6 +286,7 @@ class FakeDetectionDB:
         If the video_post_id doesn't exist in video_posts, MySQL raises FK error
         which we surface as a 422 back to the caller.
         """
+        self._ensure_ready()
         sql = """
             INSERT INTO fake_identification
                 (transcript_text, is_farming_related, farming_relevance_score,
@@ -305,6 +314,7 @@ class FakeDetectionDB:
 
     # ── SELECT ONE ────────────────────────────────────────────────────────────
     async def get_by_id(self, record_id: int) -> Optional[Dict[str, Any]]:
+        self._ensure_ready()
         sql = "SELECT * FROM fake_identification WHERE id = %s LIMIT 1"
         async with self.pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -314,6 +324,7 @@ class FakeDetectionDB:
 
     # ── SELECT ALL (paginated) ────────────────────────────────────────────────
     async def get_all(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        self._ensure_ready()
         sql = """
             SELECT * FROM fake_identification
             ORDER BY created_at DESC
@@ -327,6 +338,7 @@ class FakeDetectionDB:
 
     # ── DELETE ────────────────────────────────────────────────────────────────
     async def delete_by_id(self, record_id: int) -> bool:
+        self._ensure_ready()
         sql = "DELETE FROM fake_identification WHERE id = %s"
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:

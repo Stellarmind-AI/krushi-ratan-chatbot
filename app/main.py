@@ -38,10 +38,16 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
 
     logger.info("📊 Initializing database connection pool...")
-    await init_database()
+    if settings.is_sql_enabled:
+        await init_database()
+    else:
+        logger.info("Skipping database initialization because ENABLE_SQL_FLOW=false")
 
     logger.info("🔍 Initializing fake detection service...")
-    await init_fake_detection()                                   # ← ADD
+    try:
+        await init_fake_detection()                               # ← ADD
+    except Exception as e:
+        logger.warning("Fake detection service unavailable; continuing startup", error=str(e))
 
     logger.info("📁 Loading database schemas and tools...")
     schema_generator = initialize_schemas(
@@ -62,7 +68,10 @@ async def lifespan(app: FastAPI):
 
     logger.info("🛑 Shutting down application...")
     await close_database()
-    await close_fake_detection()                                  # ← ADD
+    try:
+        await close_fake_detection()                              # ← ADD
+    except Exception as e:
+        logger.warning("Fake detection shutdown warning", error=str(e))
     logger.info("✅ Application shut down complete")
 
 
@@ -104,19 +113,30 @@ async def health_check():
 
     llm_manager = get_llm_manager()
 
-    db_healthy, llm_health = await _asyncio.gather(
-        db_manager.health_check(),
-        llm_manager.health_check_all(),
-    )
+    if settings.is_sql_enabled:
+        db_healthy, llm_health = await _asyncio.gather(
+            db_manager.health_check(),
+            llm_manager.health_check_all(),
+        )
+    else:
+        db_healthy = False
+        llm_health = await llm_manager.health_check_all()
 
     llm_primary  = llm_health.get("groq", False)
     llm_fallback = llm_health.get("openai", False)
 
-    overall_status = (
-        "healthy"  if (db_healthy and llm_primary) else
-        "degraded" if llm_primary else
-        "unhealthy"
-    )
+    if settings.is_sql_enabled:
+        overall_status = (
+            "healthy"  if (db_healthy and llm_primary) else
+            "degraded" if (db_healthy or llm_primary or llm_fallback) else
+            "unhealthy"
+        )
+    else:
+        overall_status = (
+            "healthy"  if llm_primary else
+            "degraded" if llm_fallback else
+            "unhealthy"
+        )
 
     return HealthCheckResponse(
         status=overall_status,
@@ -137,12 +157,13 @@ async def websocket_chat_endpoint(websocket: WebSocket):
 async def get_stats():
     from app.core.database import db_manager
 
-    table_count = await db_manager.get_table_count()
-    table_names = await db_manager.get_table_names()
+    table_count = await db_manager.get_table_count() if settings.is_sql_enabled else 0
+    table_names = await db_manager.get_table_names() if settings.is_sql_enabled else []
 
     return {
         "database": {
             "name":         settings.DB_NAME,
+            "enabled":      settings.is_sql_enabled,
             "total_tables": table_count,
             "tables":       table_names[:10]
         },
@@ -153,6 +174,7 @@ async def get_stats():
             "fallback_model":    settings.OPENAI_MODEL
         },
         "features": {
+            "sql_flow":    settings.is_sql_enabled,
             "text_input":  True,
             "voice_input": True,
             "voice_output": True,

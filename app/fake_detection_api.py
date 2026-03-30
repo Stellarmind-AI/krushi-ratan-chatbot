@@ -12,14 +12,12 @@ Wire in app/main.py:
     app.include_router(fake_router, prefix="/api/v1")
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, validator
 
 from app.fake_detection_service import (
-    analyse_and_store,
-    delete_detection,
     get_all_detections,
     get_detection_by_id,
     _get_detector,
@@ -55,11 +53,6 @@ class DetectResponse(BaseModel):
     decision:                  str
     reason:                    str
     created_at:                str
-
-
-class DeleteResponse(BaseModel):
-    success: bool
-    message: str
 
 
 class AnalyseOnlyResponse(BaseModel):
@@ -114,6 +107,8 @@ async def list_detections(
     """
     try:
         return await get_all_detections(limit=limit, offset=offset)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         logger.error("List detections failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Database error: {str(exc)}")
@@ -141,6 +136,8 @@ async def get_detection(record_id: int) -> Dict[str, Any]:
         return result
     except HTTPException:
         raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         logger.error("Get detection failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Database error: {str(exc)}")

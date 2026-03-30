@@ -156,7 +156,7 @@ class Orchestrator:
             #   - Route agent classifying as SQL → redirects to app
             #   - Only NAVIGATION, GENERAL, and GREETING flows are active
             # ───────────────────────────────────────────────────────────────
-            _sql_enabled = getattr(settings, 'ENABLE_SQL_FLOW', 'false').lower() == 'true'
+            _sql_enabled = settings.is_sql_enabled
 
             if confirmed_intent and not _sql_enabled:
                 logger.info(f"SQL FLOW DISABLED — confirmed_intent='{confirmed_intent}' blocked")

@@ -656,7 +656,7 @@ class KnowledgeHandler:
         """
         # Check if SQL flow is enabled
         from app.core.config import settings
-        _sql_enabled = getattr(settings, 'ENABLE_SQL_FLOW', 'false').lower() == 'true'
+        _sql_enabled = settings.is_sql_enabled
         if not _sql_enabled:
             logger.info("SQL fallback SKIPPED — ENABLE_SQL_FLOW is false")
             return None
