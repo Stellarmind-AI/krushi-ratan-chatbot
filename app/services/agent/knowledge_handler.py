@@ -299,17 +299,52 @@ class KnowledgeHandler:
             "You are a navigation assistant for the Krushi Ratn agricultural app.\n"
             "Below is a complete list of ALL app screens with step-by-step instructions.\n"
             "The user will ask a question in English, Gujarati, or Romanized Gujarati.\n\n"
+            "FEATURES THAT EXIST IN KRUSHI RATN APP:\n"
+            "- K-Shop: Buy agricultural products (equipment, seeds, supplies)\n"
+            "- K-Shop Orders: View, track, and cancel K-Shop orders\n"
+            "- Crop Sell: Farmers list crops for sale, receive buyer offers, confirm sale\n"
+            "- Buy/Sell Marketplace: Buy or sell used items (animals, tractors, equipment)\n"
+            "- Mandi Bhav / Yard Prices: Check market yard crop prices\n"
+            "- Farming Videos: Watch educational farming videos\n"
+            "- Agricultural News: Read farming-related news\n"
+            "- AI Chatbot: Ask questions about the app\n"
+            "- Profile: Update name, photo, mobile number\n"
+            "- Language Settings: Change app display language\n"
+            "- Switch Role: Farmer / Company / Video Creator roles\n"
+            "- Video Creator: Make and upload farming videos\n"
+            "- Customer Support: Contact help via Profile → Help & Support\n"
+            "- Login / Register / Logout / Delete Account\n\n"
+            "FEATURES THAT DO NOT EXIST IN KRUSHI RATN APP:\n"
+            "- Payment system / Online payment / Payment methods / UPI / Card payment\n"
+            "- Price alerts / Notifications for price changes / Alert set for crops\n"
+            "- Set price for products or crops (prices come from market yard or buyer offers)\n"
+            "- Weather forecast / Mausam\n"
+            "- Government schemes / Yojana / Subsidy\n"
+            "- Crop insurance\n"
+            "- Soil testing / Soil health\n"
+            "- Pest/disease identification\n"
+            "- Expert chat / Agronomist consultation\n"
+            "- Loan / Credit / Finance\n"
+            "- Transport / Logistics / Delivery tracking\n"
+            "- Geo-tagging / Farm mapping\n"
+            "- Crop calendar / Sowing schedule\n\n"
             "YOUR JOB:\n"
-            "1. Find the screen that BEST matches the user's question.\n"
+            "1. Find the screen that BEST matches the user's question from the steps below.\n"
             "2. Output ONLY the exact steps from that screen's 'How to use' field.\n"
             "3. Do NOT mix steps from different screens.\n"
             "4. Do NOT add intro sentences, tips, or explanations not in the source.\n"
             "5. Do NOT add a closing line like 'Let me know if you need help'.\n"
-            "6. If NO screen matches, say exactly: 'This information is not yet included in the Krushi Ratn AI chatbot. "
+            "6. If the user asks about a feature that DOES NOT EXIST in the app, say exactly:\n"
+            "   'This feature is not available in the Krushi Ratn app. "
+            "I can help you with app navigation, K-Shop products, crop selling, "
+            "buy/sell marketplace, mandi prices, farming videos, and news. "
+            "If you still need help, contact support through Profile → Help & Support.'\n"
+            "7. If the feature EXISTS but you cannot find matching steps, say exactly:\n"
+            "   'This information is not yet included in the Krushi Ratn AI chatbot. "
             "It will be available for you soon! "
             "Until then, I can help you with app navigation and understanding the app features. "
             "If you still need help, contact support through Profile → Help & Support.'\n"
-            "7. Answer in ENGLISH only — translation is handled separately."
+            "8. Answer in ENGLISH only — translation is handled separately."
         )
 
         user_message = (
@@ -338,12 +373,14 @@ class KnowledgeHandler:
 
             answer = response.content.strip()
 
-            # If LLM says "no match", return universal fallback
+            # If LLM says feature doesn't exist or no match found, return the answer directly
+            # (it's already the correct fallback message from the prompt)
             no_match_signals = ["not yet included", "don't have navigation",
-                                "no screen matches", "not available", "cannot find"]
+                                "no screen matches", "not available in the krushi ratn",
+                                "not available", "cannot find", "feature is not available"]
             if any(sig in answer.lower() for sig in no_match_signals):
-                logger.info("NAV: LLM found no matching screen — returning fallback")
-                return self._nav_fallback()
+                logger.info(f"NAV: LLM returned fallback message — passing through")
+                return answer
 
             logger.final_answer(answer, lang="en")
             return answer
@@ -593,7 +630,23 @@ class KnowledgeHandler:
                 "You are a helpful assistant for the Krushi Ratn agricultural marketplace app.\n"
                 "Answer the user's general question using ONLY the information provided below.\n"
                 "Be friendly, concise, and accurate.\n"
-                "Do NOT make up information that is not in the provided content.\n"
+                "Do NOT make up information that is not in the provided content.\n\n"
+                "FEATURES THAT EXIST IN KRUSHI RATN APP:\n"
+                "K-Shop, Crop Sell, Buy/Sell Marketplace, Mandi Bhav / Yard Prices, "
+                "Farming Videos, Agricultural News, AI Chatbot, Profile Management, "
+                "Language Settings, Role Switching (Farmer/Company/Video Creator), "
+                "Customer Support, Login/Register/Logout/Delete Account.\n\n"
+                "FEATURES THAT DO NOT EXIST: Payment system/Online payment/UPI/Card payment, "
+                "Price alerts/Notifications for price changes, "
+                "Setting price for products or crops (prices come from market yard or buyer offers), "
+                "Weather forecast, Government schemes/Yojana, "
+                "Crop insurance, Soil testing, Pest identification, Expert chat, "
+                "Loan/Credit, Transport/Delivery tracking, Geo-tagging, Crop calendar.\n\n"
+                "If the user asks about a feature that DOES NOT EXIST, say:\n"
+                "'This feature is not available in the Krushi Ratn app. "
+                "I can help you with app navigation, K-Shop products, crop selling, "
+                "buy/sell marketplace, mandi prices, farming videos, and news. "
+                "If you still need help, contact support through Profile → Help & Support.'\n\n"
                 "Answer in ENGLISH only. Do not write any Gujarati or Hindi words."
             )
 
@@ -687,6 +740,15 @@ class KnowledgeHandler:
             "This information is not yet included in the Krushi Ratn AI chatbot. "
             "It will be available for you soon! "
             "Until then, I can help you with app navigation and understanding the app features. "
+            "If you still need help, contact support through Profile → Help & Support."
+        )
+
+    @staticmethod
+    def _feature_not_in_app() -> str:
+        return (
+            "This feature is not available in the Krushi Ratn app. "
+            "I can help you with app navigation, K-Shop products, crop selling, "
+            "buy/sell marketplace, mandi prices, farming videos, and news. "
             "If you still need help, contact support through Profile → Help & Support."
         )
 
