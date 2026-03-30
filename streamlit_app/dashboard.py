@@ -14,12 +14,22 @@ import json
 import base64
 import uuid
 from datetime import datetime
-from urllib.parse import urlparse, urlunparse
 from audio_recorder_streamlit import audio_recorder
 from dotenv import load_dotenv
 
 # Load .env file so deployment overrides are available during local runs.
 load_dotenv()
+
+
+# ── Backend URL resolution ────────────────────────────────────────────────────
+# Priority: .env / Streamlit secrets → production default
+#
+# Streamlit Cloud:  no .env → uses PRODUCTION_BACKEND_URL → works
+# Local dev:        .env has WS_CHAT_URL=ws://localhost:8002/ws/chat → works
+# New developer:    copies .env.example → gets localhost URLs → works
+# ──────────────────────────────────────────────────────────────────────────────
+
+_PRODUCTION_BACKEND = "test-ai.krushiratn.com"
 
 
 def _get_runtime_setting(name: str) -> str:
@@ -34,34 +44,20 @@ def _get_runtime_setting(name: str) -> str:
     return str(secret_value).strip() if secret_value is not None else ""
 
 
-def _normalized_backend_host() -> str:
-    host = _get_runtime_setting("APP_HOST") or "localhost"
-    return "localhost" if host == "0.0.0.0" else host
-
-
 def _resolve_health_check_url() -> str:
-    configured_url = _get_runtime_setting("HEALTH_CHECK_URL")
-    if configured_url:
-        return configured_url
-
-    app_port = _get_runtime_setting("APP_PORT") or "8000"
-    return f"http://{_normalized_backend_host()}:{app_port}/health"
+    """Health check URL. Falls back to production."""
+    configured = _get_runtime_setting("HEALTH_CHECK_URL")
+    if configured:
+        return configured
+    return f"https://{_PRODUCTION_BACKEND}/health"
 
 
 def _resolve_ws_url() -> str:
-    configured_url = _get_runtime_setting("WS_CHAT_URL")
-    if configured_url:
-        return configured_url
-
-    health_url = _get_runtime_setting("HEALTH_CHECK_URL")
-    if health_url:
-        parsed = urlparse(health_url)
-        if parsed.scheme in {"http", "https"} and parsed.netloc:
-            ws_scheme = "wss" if parsed.scheme == "https" else "ws"
-            return urlunparse((ws_scheme, parsed.netloc, "/ws/chat", "", "", ""))
-
-    app_port = _get_runtime_setting("APP_PORT") or "8000"
-    return f"ws://{_normalized_backend_host()}:{app_port}/ws/chat"
+    """WebSocket URL. Falls back to production."""
+    configured = _get_runtime_setting("WS_CHAT_URL")
+    if configured:
+        return configured
+    return f"wss://{_PRODUCTION_BACKEND}/ws/chat"
 
 st.set_page_config(
     page_title="Krushi Node — AI Chatbot",
