@@ -69,6 +69,9 @@ NAVIGATION
   - How to use the app / what features are available (step-by-step)
   - How to list an old item for sale / how does buy-sell process work
   - How to sell crops / pak vechuv kevi rite
+  - How to BUY CROPS from farmers (company role crop buying process)
+  - I want to buy crops / mane pak kharido / pak kharidu / maro pak kharidu
+  - How does a company purchase crops from a farmer
   - Where to find any screen or feature in the app
   - How to change language / settings
   - How to track an order
@@ -153,6 +156,12 @@ Examples:
   "how do i register in krushi ratn" → NAVIGATION
   "pak vechuv kevi rite" → NAVIGATION
   "maro pak kevi rite vechuv" → NAVIGATION
+  "i want to buy crops" → NAVIGATION
+  "mane pak kharido" → NAVIGATION
+  "mare pak kharida chhe" → NAVIGATION
+  "pak kharidu kevi rite" → NAVIGATION
+  "company thi crop kharidu" → NAVIGATION
+  "how to buy crops from farmer" → NAVIGATION
   "kshop thi product kevi rite kharidu" → NAVIGATION
   "order track kevi rite" → NAVIGATION
   "juna vastu kharidu kevi rite" → NAVIGATION
