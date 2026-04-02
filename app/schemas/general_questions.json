@@ -153,7 +153,7 @@
         "profile update"
       ],
       "question": "How do I update my profile?",
-      "answer": "To update profile: Go to Profile tab → tap 'Edit Profile' or the pencil icon. You can update: your name, village, district, state, and profile photo. After making changes, tap 'Save'. Note: Your mobile number cannot be changed as it is your login ID. Contact support if you need to change your registered mobile number."
+      "answer": "To update profile: Go to Profile tab → tap 'Edit Profile' or the pencil icon. You can update: your name, village, district, state, and profile photo. After making changes, tap 'Save'."
     },
     {
       "id": "gq_013",
@@ -320,23 +320,24 @@
         "products in k-shop"
       ],
       "question": "What agricultural products are available in K-Store (K-Shop)?",
-      "answer": "K-Store (Krushi Store / K-Shop) offers a wide range of farming products across these categories: (1) Equipment / Machines — Power Weeder, Mini Tractor, Reaper Harvester, Brush Cutter, Chainsaw, Wood Chipper, Chaff Cutter, Cultivator; (2) Water Management — Water Pumps, Drip Irrigation, Sprinkler; (3) Spraying — Boom Sprayer, Battery Sprayer, Duster; (4) Seeds (Biyaran) — cotton, groundnut, sesame, bajri, wheat varieties; (5) Fertilizer (Khaatar) — organic and chemical fertilizers; (6) Chemicals — pesticides, fungicides; (7) Harvest tools — threshers, separators. Products are from verified companies like MITSUYAMA, RAPL, and others. To browse: tap K-Store on Home screen → select category → see products with price and discount."
+      "answer": "KrushiRatn એપના K-Store વિભાગમાં ખેડૂતો માટે વિવિધ પ્રકારના ખેતી સંબંધિત ઉત્પાદનો એક જ પ્લેટફોર્મ પર ઉપલબ્ધ છે. અહીં તમે નીચે મુજબના પ્રોડક્ટ્સ મેળવી શકો છો:🌾 ઉપલબ્ધ પ્રોડક્ટ કેટેગરીઝ  🚜 ખેતી મશીનરી અને સાધનો : વોટર પંપ,ચાફ કટર,સીડર,પાવર વીડર,મીની ટિલર,મોટર સ્ટાર્ટર,અર્થ ઓગર,બ્રશ કટર,વુડ ચીપર,રીપર કટર,એગ્રીકલ્ચર મશીન ; 🌱 સ્પ્રેયર (Sprayers) : પેટ્રોલ સ્પ્રેયર, બેટરી સ્પ્રેયર, મેન્યુઅલ સ્પ્રેયર"
     },
     {
       "id": "gq_022",
       "tags": [
         "vechan",
         "વેચાણ",
-        "juna vastu",
-        "જૂની વસ્તુ",
+        "juna products",
+        "જૂની પ્રોડક્ટ્સ",
+        "જૂના પ્રોડક્ટ્સ વેચવા",
         "ખરીદ-વેચાણ",
         "muki shaku",
         "mukuv",
         "kharidi",
         "vecho",
-        "list my old item",
-        "list old item",
-        "old item for sale",
+        "list my old products",
+        "list old products",
+        "old products for sale",
         "how can i list",
         "how to list",
         "listing for sale",
@@ -361,8 +362,8 @@
         "tractor sell",
         "equipment sell"
       ],
-      "question": "How can I list my old item for sale? How does buy-sell process work on Krushi Ratn?",
-      "answer": "To sell your old item (tractor, animal, equipment) on Krushi Ratn: (1) Tap 'Buy Sell' tab on Home screen; (2) Tap 'Sell' button; (3) Select category — ટ્રેક્ટર, ભેંસ, ગાય, ઘોડો, ખેતી ઓજાર, etc.; (4) Fill in details — price, description, photos, your contact; (5) Submit → your listing goes live immediately. To buy: (1) Tap 'Buy Sell'; (2) Browse or search by category; (3) Tap a listing to see seller's phone number; (4) Contact seller directly to negotiate and finalize. How Krushi Ratn helps the buy-sell process: free listings, direct farmer-to-farmer contact, no middlemen, categories for 20+ types of agricultural items, mark listing as 'Sold Out' when done, edit your listing anytime from My Orders → Buy Sell."
+      "question": "How can I sell my old products for sale? How does buy-sell process work on Krushi Ratn?",
+      "answer": "To sell your old products (tractor, animal, equipment) on Krushi Ratn: (1) Tap 'Buy Sell' tab on Home screen; (2) Tap 'Sell' button; (3) Select category — ટ્રેક્ટર, ભેંસ, ગાય, ઘોડો, ખેતી ઓજાર, etc.; (4) Fill in details — price, description, photos, your contact; (5) Submit → your listing goes live immediately. To buy: (1) Tap 'Buy Sell'; (2) Browse or search by category; (3) Tap a listing to see seller's phone number; (4) Contact seller directly to negotiate and finalize. How Krushi Ratn helps the buy-sell process: free listings, direct farmer-to-farmer contact, no middlemen, categories for 20+ types of agricultural items, mark listing as 'Sold Out' when done, edit your listing anytime from My Orders → Buy Sell."
     },
     {
       "id": "gq_023",

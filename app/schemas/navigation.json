@@ -226,7 +226,7 @@
       ],
       "screen": "Profile Update",
       "description": "How to edit name, profile picture and mobile number",
-      "how_to_use": "Step 1: Open Krushi Ratn app.\nStep 2: Click on the Profile icon (left corner).\nStep 3: Click on Edit button.\nStep 4: Change name, mobile number, or profile picture.\nStep 5: Click on 'Save' button to update your details."
+      "how_to_use": "Step 1: Open Krushi Ratn app.\nStep 2: Click on the Profile icon (left corner).\nStep 3: Click on Edit button.\nStep 4: Change name or profile picture.\nStep 5: Click on 'Save' button to update your details."
     },
     {
       "id": "nav_buysell_sell_product",
@@ -496,30 +496,59 @@
       "how_to_use": "Step 1: Open Krushi Ratn app.\nStep 2: Click on the Profile icon (left corner).\nStep 3: Click on 'Change Language'.\nStep 4: Select your preferred language."
     },
     {
-      "id": "nav_company_crop_buy",
-      "tags": [
-        "company buy crop",
-        "company role",
-        "buy crop as company",
-        "company order",
-        "company receive order",
-        "company crop order",
-        "company side",
-        "company login",
-        "company account crop",
-        "કંપની ભૂમિકા",
-        "કંપની ઓર્ડર",
-        "કંપની ભાવ",
-        "કંપની ખરીદ",
-        "કંપની ખેડૂત",
-        "ઓફર ભાવ",
-        "ભૂ  ક"
-      ],
-      "screen": "Company — Buy Crops (Company Role)",
-      "description": "How a company can receive and buy crops from farmers",
-      "how_to_use": "Step 1: Open Krushi Ratn application with the Company role.\nStep 2: Accept the order.\nStep 3: Enter your price.\nStep 4: Click on Submit.\nStep 5: You can chat with or contact the farmer to buy the crops directly."
+      "id": "nav_crop_view_my_orders",
+      "tags": 
+  [
+    "my crops",
+    "view my crops",
+    "crop status",
+    "my crop orders",
+    "check crop status",
+    "crop sale orders",
+    "mara pak joi",
+    "pak status joi",
+    "my orders crop",
+    "crop order check",
+    "પાક ઓર્ડર",
+    "મારા પાક",
+    "પાક સ્ટેટસ",
+    "પાક વેચાણ ઓર્ડર",
+    "મારા ઓર્ડર પાક",
+    "પાક કેવી રીતે જોવું",
+    "પાક સ્થિતિ જુઓ"
+  ],
+  "screen": "My Orders — Crop Sale (Farmer)",
+  "description": "How to view crops that are for sale",
+  "how_to_use": "Step 1: Go to the Home Page.\nStep 2: Click on 'My Order'.\nStep 3: Click on 'Crop Sale' button.\nStep 4: You will now see the orders screen.\nStep 5: Click on the crop for which you want to check the status."
     },
     {
+  "id": "nav_company_crop_buy_full_flow",
+  "tags": [
+    "buy crops",
+    "purchase crops",
+    "want to buy crops",
+    "company buy crop",
+    "company role",
+    "company order",
+    "company receive order",
+    "company crop order",
+    "company account crop",
+    "paak kharidvo",
+    "mare paak kharidvo che",
+    "crop purchase",
+    "how to buy crops",
+    "કંપની ખરીદ",
+    "કંપની ઓર્ડર",
+    "કંપની ભાવ",
+    "કંપની ખેડૂત",
+    "ઓફર ભાવ",
+    "કંપની ભૂમિકા"
+  ],
+  "screen": "Company — Buy Crops (Full Flow)",
+  "description": "Complete flow for a company to buy crops from farmers including login, order handling, pricing, and order completion",
+  "how_to_use": "Step 1:\nકંપની તરીકે Login કરો.\nજો તમારું એકાઉન્ટ નથી, તો પહેલા Company Role તરીકે Register કરો.\n\nStep 2:\nLogin કર્યા બાદ, જો તમારા દ્વારા Register વખતે પસંદ કરેલા પાક (crops) તમારા જ Taluka ના કોઈ ખેડૂત દ્વારા વેચવા માટે મૂકવામાં આવ્યા હશે, તો તે orders તમને મળશે.\n\nStep 3:\nતમે Order જોઈને નીચેના વિકલ્પમાંથી પસંદ કરી શકો છો:\nOrder Accept કરો\nઅથવા Crop નો Sample Request કરો\n\nStep 4:\nજો તમે Order Accept કરો છો, તો તમને પાક માટે Price આપવો પડશે.\nખેડૂતને તમારો Price મળશે અને તેઓ તેને Accept અથવા Reject કરી શકે છે.\nજો ખેડૂત Price Accept કરે, તો તમને Order Confirmation ની Notification મળશે.\n\nStep 5:\nOrder Confirm થયા બાદ, તમે ખેડૂતને Direct Call કરી શકો છો અને Delivery / Pickup અંગેની માહિતી નક્કી કરી શકો છો.\n\nStep 6:\nજ્યારે તમે ખેડૂત પાસેથી પાક મેળવી લો, ત્યારબાદ KrushiRatn App માં જઈને:\nFinal Weight દાખલ કરો\nFinal Price દાખલ કરો\nBill ની Photo Upload કરો\n\nStep 7:\nઆ બધી વિગતો ઉમેર્યા બાદ તમારું Order Successfully Complete થઈ જશે."
+},
+{
       "id": "nav_account_register",
       "tags": [
         "create account",
@@ -830,7 +859,7 @@
       ],
       "screen": "Home — Agricultural News",
       "description": "How to read agricultural news on the Krushi Ratn app",
-      "how_to_use": "Step 1: Open the Krushi Ratn app.\nStep 2: On the Home Screen, scroll to the News section.\nStep 3: Browse news articles by scrolling through the feed.\nStep 4: Tap on any news article to read the full story.\nStep 5: You can share news articles with other farmers."
+      "how_to_use": "Step 1: Open the Krushi Ratn app.\nStep 2: On the Home Screen, scroll to the News section.\nStep 3: Browse news articles by scrolling through the feed.\nStep 4: Tap on any news article to read the full story."
     },
     {
       "id": "nav_check_mandi_price",
@@ -953,6 +982,101 @@
       "screen": "Crop Sell — Price Determination",
       "description": "How the crop price is decided after submission on Krushi Ratn",
       "how_to_use": "Step 1: After you submit your crop for sale, your listing becomes visible to companies and buyers.\nStep 2: Interested buyers/companies will send you price offers.\nStep 3: You can see all offers with the buyer name and their offered price.\nStep 4: The Market Yard reference price is shown for comparison.\nStep 5: You compare offers and choose the best price.\nStep 6: Tap on the offer you want to accept and click 'Confirm Sell'.\nStep 7: The final price is the offer you accepted — you are in control of which buyer to sell to."
-    }
+    },
+    {
+  "id": "nav_profile_address_update",
+  "tags": [
+    "address change",
+    "update address",
+    "change address",
+    "address update kevi rite",
+    "profile address",
+    "edit address",
+    "address badlavu",
+    "new address set",
+    "profile address change",
+    "update personal details",
+    "સરનામું બદલો",
+    "સરનામું અપડેટ",
+    "એડ્રેસ બદલો",
+    "પ્રોફાઇલ સરનામું",
+    "સરનામું કેવી રીતે બદલો",
+    "એડિટ પ્રોફાઇલ",
+    "મારું સરનામું બદલવું"
+  ],
+  "screen": "Profile Update — Address",
+  "description": "How to change or update address in profile",
+  "how_to_use": "Step 1: Open the Krushi Ratn app.\nStep 2: Click on the Profile icon (top left corner).\nStep 3: Click on the Edit button.\nStep 4: Change your name, mobile number, or profile picture.\nStep 5: Click on the ‘Save’ button to update your details"
+},
+{
+  "id": "nav_yard_price_my_taluka",
+  "tags": [
+    "yard price taluka",
+    "my taluka price",
+    "check yard price",
+    "mandi bhav taluka",
+    "crop price taluka",
+    "yard price near me",
+    "taluka yard price",
+    "see local price",
+    "market yard price",
+    "price in my area",
+    "યાર્ડ ભાવ તાલુકા",
+    "મારા તાલુકાનો ભાવ",
+    "ભાવ કેવી રીતે જોવો",
+    "યાર્ડ ભાવ જુઓ",
+    "બઝાર ભાવ તાલુકા",
+    "માર્કેટ યાર્ડ ભાવ"
+  ],
+  "screen": "Home — Yard Prices (Taluka)",
+  "description": "How to check crop prices of your own taluka yard from the home screen",
+  "how_to_use": "Step 1: Open the KrushiRatn app.\nStep 2: Go to the Home Page.\nStep 3: In the Home Page, go to the 'Yard' section.\nStep 4: Here you can easily view the prices of different crops available in your taluka's yard."
+},
+  {
+  "id": "nav_crop_order_cancel",
+  "tags": [
+    "cancel crop order",
+    "crop order cancel",
+    "cancel my crop",
+    "order cancel crop sell",
+    "crop sell cancel",
+    "how to cancel crop order",
+    "cancel order farmer",
+    "crop order remove",
+    "cancel accepted order",
+    "crop order kevi rite cancel karvu",
+    "પાક ઓર્ડર કેન્સલ",
+    "ઓર્ડર રદ કરો",
+    "પાક વેચાણ કેન્સલ",
+    "મારો ઓર્ડર રદ",
+    "પાક ઓર્ડર કેવી રીતે રદ કરવો"
+  ],
+  "screen": "My Orders — Crop Sell (Cancel Order)",
+  "description": "How to cancel a crop sell order before accepting a buyer's price",
+  "how_to_use": "Step 1: Go to the Home Page.\nStep 2: Click on 'My Order'.\nStep 3: Click on 'Crop Sell' tab.\nStep 4: You will see all your orders.\nStep 5: Select the order you want to cancel.\nStep 6:\nIf you have not yet accepted any company's price, click on 'None of the Above' to cancel the order.\nIf you have already accepted a company's price, then the order cannot be canceled."
+},
+{
+  "id": "nav_video_draft_view",
+  "tags": [
+    "video draft",
+    "draft videos",
+    "view draft video",
+    "my draft videos",
+    "video creator draft",
+    "draft video kevi rite jovu",
+    "video draft edit",
+    "pending video",
+    "saved video draft",
+    "edit draft video",
+    "વિડિયો ડ્રાફ્ટ",
+    "ડ્રાફ્ટ વિડિયો જુઓ",
+    "મારા વિડિયો ડ્રાફ્ટ",
+    "વિડિયો એડિટ",
+    "ડ્રાફ્ટ વિડિયો કેવી રીતે જોવો"
+  ],
+  "screen": "Video Creator — Draft Videos",
+  "description": "How to view and manage drafted videos as a Video Creator",
+  "how_to_use": "Step 1: Make sure you are logged in as a Video Creator.\nStep 2: Click on 'Your Video'.\nStep 3: Click on the 'Video Draft' button.\nStep 4: You will see all your drafted videos here.\nStep 5: Click on any video to edit it and upload it."
+}
   ]
 }

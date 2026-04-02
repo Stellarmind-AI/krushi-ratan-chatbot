@@ -328,29 +328,44 @@ class KnowledgeHandler:
             "- Transport / Logistics / Delivery tracking\n"
             "- Geo-tagging / Farm mapping\n"
             "- Crop calendar / Sowing schedule\n\n"
+            "MULTI-PART QUESTION HANDLING:\n"
+            "The user sometimes asks TWO questions in one message, connected by words like\n"
+            "'and', 'also', 'additionally', 'as well as', 'ane' (Gujarati), 'aur' (Hindi).\n"
+            "Examples of two-part questions:\n"
+            "  - 'How do I sell my old item? And how does the app help with buying and selling?'\n"
+            "  - 'How do I register? Also, what features does the app have?'\n"
+            "  - 'How to buy from K-Shop and how does K-Shop work?'\n"
+            "When you detect two distinct questions:\n"
+            "  PART 1: Answer the HOW-TO question first (exact steps from the matching screen).\n"
+            "  PART 2: Then answer the general/overview question in 2-3 clear English sentences\n"
+            "          based on your knowledge of Krushi Ratn from the FEATURES list above.\n"
+            "  Separate the two answers with a blank line — no heading or label needed.\n\n"
             "YOUR JOB:\n"
-            "1. Find the screen that BEST matches the user's question from the steps below.\n"
-            "2. Output ONLY the exact steps from that screen's 'How to use' field.\n"
+            "1. Check if the user is asking ONE question or TWO questions.\n"
+            "2. For HOW-TO questions: find the best matching screen and output its exact steps.\n"
             "3. Do NOT mix steps from different screens.\n"
-            "4. Do NOT add intro sentences, tips, or explanations not in the source.\n"
+            "4. Do NOT add intro sentences, tips, or explanations not in the source steps.\n"
             "5. Do NOT add a closing line like 'Let me know if you need help'.\n"
-            "6. If the user asks about a feature that DOES NOT EXIST in the app, say exactly:\n"
+            "6. For GENERAL/OVERVIEW questions (not how-to): answer in 2-3 sentences using\n"
+            "   the FEATURES list above. Do not make up features that are not listed.\n"
+            "7. If the user asks about a feature that DOES NOT EXIST in the app, say exactly:\n"
             "   'This feature is not available in the Krushi Ratn app. "
             "I can help you with app navigation, K-Shop products, crop selling, "
             "buy/sell marketplace, mandi prices, farming videos, and news. "
             "If you still need help, contact support through Profile → Help & Support.'\n"
-            "7. If the feature EXISTS but you cannot find matching steps, say exactly:\n"
+            "8. If the feature EXISTS but you cannot find matching steps, say exactly:\n"
             "   'This information is not yet included in the Krushi Ratn AI chatbot. "
             "It will be available for you soon! "
             "Until then, I can help you with app navigation and understanding the app features. "
             "If you still need help, contact support through Profile → Help & Support.'\n"
-            "8. Answer in ENGLISH only — translation is handled separately."
+            "9. Answer in ENGLISH only — translation is handled separately."
         )
 
         user_message = (
             f"User Question: {question}\n\n"
             f"ALL APP SCREENS AND STEPS:\n{context}\n\n"
-            f"Find the best matching screen and output its exact steps."
+            f"If the question has TWO parts (how-to + general overview), answer both.\n"
+            f"Otherwise find the best matching screen and output its exact steps."
         )
 
         messages = [
@@ -366,7 +381,7 @@ class KnowledgeHandler:
                 response = await self.llm_manager.generate(
                     messages=messages,
                     temperature=0.1,
-                    max_tokens=600,
+                    max_tokens=900,   # raised from 600 — two-part answers need extra room
                 )
             logger.llm_call_done(1, "NAVIGATION_answer", t.elapsed_ms,
                                  tokens_used=response.tokens_used or 0)
