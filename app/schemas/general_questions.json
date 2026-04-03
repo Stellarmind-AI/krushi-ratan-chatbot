@@ -153,7 +153,7 @@
         "profile update"
       ],
       "question": "How do I update my profile?",
-      "answer": "To update profile: Go to Profile tab → tap 'Edit Profile' or the pencil icon. You can update: your name, village, district, state, and profile photo. After making changes, tap 'Save'."
+      "answer": "To update profile: Go to Profile tab → tap 'Edit Profile' or the pencil icon. You can update: your name, village, district, state, address and profile photo. After making changes, tap 'Save'."
     },
     {
       "id": "gq_013",
@@ -363,7 +363,7 @@
         "equipment sell"
       ],
       "question": "How can I sell my old products for sale? How does buy-sell process work on Krushi Ratn?",
-      "answer": "To sell your old products (tractor, animal, equipment) on Krushi Ratn: (1) Tap 'Buy Sell' tab on Home screen; (2) Tap 'Sell' button; (3) Select category — ટ્રેક્ટર, ભેંસ, ગાય, ઘોડો, ખેતી ઓજાર, etc.; (4) Fill in details — price, description, photos, your contact; (5) Submit → your listing goes live immediately. To buy: (1) Tap 'Buy Sell'; (2) Browse or search by category; (3) Tap a listing to see seller's phone number; (4) Contact seller directly to negotiate and finalize. How Krushi Ratn helps the buy-sell process: free listings, direct farmer-to-farmer contact, no middlemen, categories for 20+ types of agricultural items, mark listing as 'Sold Out' when done, edit your listing anytime from My Orders → Buy Sell."
+      "answer": "To sell your old products (tractor, animal, equipment) on Krushi Ratn: (1) Click on 'Buy Sell' tab on Home screen; (2) Click on 'Sell Your'; (3) Click the 'Sell' button; (4) Select the category in which you want to sell your product — ટ્રેક્ટર, ભેંસ, ગાય, ઘોડો, ખેતી ઓજાર, etc.; (5) Fill the form with required details; (6) Click 'Submit' to list your product for sale. Your listing goes live immediately. Krushi Ratn connects farmers and buyers directly — no middleman, so you get the right price for your product."
     },
     {
       "id": "gq_023",
@@ -699,7 +699,7 @@
       ],
       "question": "What should I do after receiving buyer inquiries?",
       "answer": "After receiving buyer inquiries, you can directly contact the buyer using the provided mobile number and location details in the order or listing. The buying and selling process in the Buy/Sell module is manual, so you need to communicate and finalize the deal directly with the buyer."
-},
+    },
     {
       "id": "gq_033",
       "tags": [
@@ -776,7 +776,7 @@
       ],
       "question": "What documents are needed for selling livestock?",
       "answer": "The required details and documentation for livestock selling are defined by the Krushi Ratn team. Based on the product or listing type, the app will specify what information or supporting details are needed while posting the listing."
-},
+    },
     {
       "id": "gq_035",
       "tags": [
@@ -861,43 +861,78 @@
       "answer": "The Krushi Ratn AI chatbot is currently available only in Gujarati (ગુજરાતી). For example: 'કપાસ નો ભાવ શું છે?' or 'ઘઉં ની માહિતી આપો'. You can type in Gujarati, and the chatbot will understand and respond accordingly. In future updates, the chatbot will support multiple languages including Gujarati, English, and Hindi, allowing users to interact in their preferred language."
     },
     {
-  "id": "gq_037",
-  "tags": [
-    "home screen", "home screen features", "what is on home screen",
-    "home screen ma shu che", "home screen ni suvidha",
-    "home page features", "home page ma shu che",
-    "home screen options", "main screen", "main menu",
-    "app home screen", "home screen buttons",
-    "home screen kya kya che", "home ni suvidha",
-    "home screen vishe", "home screen batao",
-    "what features home screen", "features on home",
-    "home page options", "home screen items",
-    "હોમ સ્ક્રીન", "હોમ સ્ક્રીન પર શું છે",
-    "હોમ સ્ક્રીન ની સુવિધા", "હોમ પેજ",
-    "home screen par shu che", "home screen ni yadi"
-  ],
-  "question": "What features are available on the home screen?",
-  "answer": "On home screen, users can view Latest news and updates, K-Shop products for agricultural needs, Buy/Sell marketplace for trading old or used items, educational farming videos, upcoming features of the app, and daily crop prices from different market yards." 
-},
-{
-  "id": "gq_038",
-  "tags": [
-    "different from other apps", "unique", "what makes different",
-    "krushi ratn different", "why krushi ratn", "better than other apps",
-    "unique features", "special features", "why use krushi ratn",
-    "krushi ratn vs other", "app difference", "what is special",
-    "why choose krushi ratn", "app advantage", "benefit over others",
-    "bija apps thi alag", "shu alag che", "shun vishesh che",
-    "kyare alag che", "unique kya che", "special kya che",
-    "krushi ratn nu vishesh", "other apps thi better",
-    "advantage of krushi ratn", "krushi ratn benefit",
-    "bija apps kartan saru", "app comparison",
-    "ક્રૂષિ રત્ન વિશેષ", "ક્રૂષિ રત્ન અલગ",
-    "ક્રૂષિ રત્ન ફાયદો", "અન્ય એપ કરતાં",
-    "vishesh shu che", "alag shu che", "faydo shu che"
-  ],
-  "question": "What makes Krushi Ratn different from other apps?",
-  "answer": "Krushi Ratn is built specifically for Gujarat farmers and stands apart from general apps in these ways: (1) All-in-One for Gujarat Farmers — mandi bhav, K-Shop, buy/sell, videos, news, and crop selling are all in a single app. No need to use 5 different apps; (2) Real-time Mandi Bhav — live crop prices from 200+ APMC yards across all Gujarat districts updated daily. Most apps only show delayed or limited data; (3) Gujarati-First Design — the entire app, AI chatbot, and content is available in Gujarati. The AI understands Gujarati script, Romanized Gujarati, and English — built for farmers who are not comfortable in English; (4) Verified K-Shop Companies — only genuine, verified agricultural companies sell on K-Shop. No counterfeit products; (5) Direct Farmer-to-Farmer Trading — the Buy/Sell marketplace connects farmers directly with no middlemen or commission fees; (6) AI Chatbot in Gujarati — ask any farming or price question by voice or text in Gujarati and get an instant answer. No other agricultural app in Gujarat offers this; (7) Crop Selling to Companies — farmers can directly sell harvested crops to verified companies at transparent prices, eliminating traders and commission agents; (8) Free to Use — registration, mandi bhav, videos, news, and buy/sell listings are all completely free. You only pay when buying a K-Shop product."
-}
+      "id": "gq_037",
+      "tags": [
+        "home screen",
+        "home screen features",
+        "what is on home screen",
+        "home screen ma shu che",
+        "home screen ni suvidha",
+        "home page features",
+        "home page ma shu che",
+        "home screen options",
+        "main screen",
+        "main menu",
+        "app home screen",
+        "home screen buttons",
+        "home screen kya kya che",
+        "home ni suvidha",
+        "home screen vishe",
+        "home screen batao",
+        "what features home screen",
+        "features on home",
+        "home page options",
+        "home screen items",
+        "હોમ સ્ક્રીન",
+        "હોમ સ્ક્રીન પર શું છે",
+        "હોમ સ્ક્રીન ની સુવિધા",
+        "હોમ પેજ",
+        "home screen par shu che",
+        "home screen ni yadi"
+      ],
+      "question": "What features are available on the home screen?",
+      "answer": "On home screen, users can view Latest news and updates, K-Shop products for agricultural needs, Buy/Sell marketplace for trading old or used items, educational farming videos, upcoming features of the app, and daily crop prices from different market yards."
+    },
+    {
+      "id": "gq_038",
+      "tags": [
+        "different from other apps",
+        "unique",
+        "what makes different",
+        "krushi ratn different",
+        "why krushi ratn",
+        "better than other apps",
+        "unique features",
+        "special features",
+        "why use krushi ratn",
+        "krushi ratn vs other",
+        "app difference",
+        "what is special",
+        "why choose krushi ratn",
+        "app advantage",
+        "benefit over others",
+        "bija apps thi alag",
+        "shu alag che",
+        "shun vishesh che",
+        "kyare alag che",
+        "unique kya che",
+        "special kya che",
+        "krushi ratn nu vishesh",
+        "other apps thi better",
+        "advantage of krushi ratn",
+        "krushi ratn benefit",
+        "bija apps kartan saru",
+        "app comparison",
+        "ક્રૂષિ રત્ન વિશેષ",
+        "ક્રૂષિ રત્ન અલગ",
+        "ક્રૂષિ રત્ન ફાયદો",
+        "અન્ય એપ કરતાં",
+        "vishesh shu che",
+        "alag shu che",
+        "faydo shu che"
+      ],
+      "question": "What makes Krushi Ratn different from other apps?",
+      "answer": "Krushi Ratn is built specifically for Gujarat farmers and stands apart from general apps in these ways: (1) All-in-One for Gujarat Farmers — mandi bhav, K-Shop, buy/sell, videos, news, and crop selling are all in a single app. No need to use 5 different apps; (2) Real-time Mandi Bhav — live crop prices from 200+ APMC yards across all Gujarat districts updated daily. Most apps only show delayed or limited data; (3) Gujarati-First Design — the entire app, AI chatbot, and content is available in Gujarati. The AI understands Gujarati script, Romanized Gujarati, and English — built for farmers who are not comfortable in English; (4) Verified K-Shop Companies — only genuine, verified agricultural companies sell on K-Shop. No counterfeit products; (5) Direct Farmer-to-Farmer Trading — the Buy/Sell marketplace connects farmers directly with no middlemen or commission fees; (6) AI Chatbot in Gujarati — ask any farming or price question by voice or text in Gujarati and get an instant answer. No other agricultural app in Gujarat offers this; (7) Crop Selling to Companies — farmers can directly sell harvested crops to verified companies at transparent prices, eliminating traders and commission agents; (8) Free to Use — registration, mandi bhav, videos, news, and buy/sell listings are all completely free. You only pay when buying a K-Shop product."
+    }
   ]
 }
