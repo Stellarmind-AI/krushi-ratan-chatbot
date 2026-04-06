@@ -286,7 +286,7 @@
       ],
       "screen": "Buy/Sell — Sell a Product (Seller)",
       "description": "How to list a product for sale on the Buy/Sell marketplace",
-      "how_to_use": "Step 1: Click on the 'Buy Sell' tab.\nStep 2: Click on 'Sell Your'.\nStep 3: Click on the 'Sell' button.\nStep 4: Select the category in which you want to sell your product.\nStep 5: Fill the form with required details.\nStep 6: Click the 'Submit' button to list your product for sale."
+      "how_to_use": "Step 1: Click on the 'Buy Sell' tab.\nStep 2: Click on 'Sell Your'.\nStep 3: Select the category in which you want to sell your product - ટ્રેક્ટર, ભેંસ, ગાય, ઘોડો, ખેતી ઓજાર, etc.\nStep 4: Fill the form with required details.\nStep 5: Click the 'Submit' button to list your product for sale."
     },
     {
       "id": "nav_buysell_view_listed",
