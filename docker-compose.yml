@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  fastapi:
+    build: .
+    container_name: chatbot-fastapi
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    networks:
+      - chatbot-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: chatbot-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - fastapi
+    networks:
+      - chatbot-network
+
+networks:
+  chatbot-network:
+    driver: bridge
+    
