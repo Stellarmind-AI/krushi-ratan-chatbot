@@ -15,6 +15,7 @@ Key design decisions:
 import json
 from typing import List, Dict, Any
 from app.services.llm.manager import get_llm_manager
+from app.services.knowledge_cache import knowledge_cache
 from app.models.chat_models import LLMMessage, QueryGenerationResponse
 from app.utils.json_parser import json_parser
 from app.core.logger import get_agent_logger
@@ -296,13 +297,18 @@ class QueryGenerator:
         schema_block = self._build_schema_block(tool_schemas)
         fk_block     = self._build_fk_block(tool_schemas)
 
+        # Inject live database content so the LLM knows what's actually in
+        # the tables (e.g. seeds.name has variety names, not the word "seeds")
+        crops_block = knowledge_cache.get_crops_summary_for_prompt()
+        kshop_block = knowledge_cache.get_kshop_summary_for_prompt()
+
         return f"""You are a production MySQL query generator for "Krushi Ratn" — a Gujarati agricultural marketplace app.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SELECTED TABLE SCHEMAS (columns + types)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {schema_block}
-
+{crops_block}{kshop_block}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FOREIGN KEY RELATIONSHIPS (exact JOIN syntax to use)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

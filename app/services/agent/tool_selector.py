@@ -162,11 +162,20 @@ SELECTION RULES
 5. Source-specific rules:
    - User says "kshop" → query_kshop_products + its dependencies
    - User says "buy sell" → query_buy_sell_products + its dependencies
-   - User asks about price/bhav/mandi → query_products + query_sub_categories + query_yards + query_cities
+   - User asks about price/bhav/mandi/cost/₹/rupees → query_products + query_sub_categories + query_yards + query_cities (NEVER query_news)
    - General product/equipment query (no source) → BOTH query_kshop_products AND query_buy_sell_products + their deps
    - Video query → query_video_posts + its dependencies
-   - News query → query_news + its dependencies
-5. Return ONLY a JSON array of tool names
+   - News query → query_news + its dependencies ONLY when user asks "what's the news", "latest news", "samachar", "khabar" — NEVER for price/availability questions
+
+6. CRITICAL — "PRICE OF X" IS ALWAYS A PRODUCT QUERY, NEVER NEWS:
+   - "What is the price of X?" → X is a product/crop, NOT a news article
+   - "How much does X cost?" → X is a product, NOT news
+   - Even if X sounds like a news title (e.g. "Fertilizer Update"), the words "price", "cost",
+     "bhav", "કિંમત", "ભાવ", "₹" mean the user wants product data from kshop_products or products table
+   - The news table has NO price column — it's impossible to get a price from news
+   - If you see ANY price indicator + unknown noun → use query_kshop_products + query_products, NEVER query_news
+
+7. Return ONLY a JSON array of tool names
 
 OUTPUT: Return ONLY a JSON array. Example:
 ["query_kshop_products", "query_kshop_companies", "query_kshop_categories", "query_kshop_weights"]
