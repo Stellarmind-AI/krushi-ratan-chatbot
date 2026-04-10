@@ -27,6 +27,7 @@ from app.services.agent.tool_selector  import get_tool_selector
 from app.services.agent.query_generator import get_query_generator
 from app.services.agent.answer_generator import get_answer_generator
 from app.services.agent.knowledge_handler import get_knowledge_handler
+from app.services.agent.status_filter     import filter_query_results
 from app.services.database.query_executor import get_query_executor
 from app.utils.schema_generator        import SchemaGenerator
 from app.services.llm.manager          import get_llm_manager
@@ -475,27 +476,47 @@ class Orchestrator:
         LLM call #3 — generate ENGLISH answer from DB rows.
         NO language instruction given to LLM. Always English output.
         Translation to user language is handled by chat_handler after this.
+
+        Status filter is applied here (post-SQL, pre-LLM):
+          - query_results          -> raw rows from DB (all statuses)
+          - query_results_filtered -> rows with inactive/closed statuses removed
+          LLM only sees filtered rows. Frontend receives both.
         """
-        logger.step("STEP 7 / ANSWER GENERATION (LLM #3)", f"{len(query_results)} result sets")
+        # ── Status filter (post-SQL, pre-LLM) ───────────────────────────────
+        logger.step("STEP 7a / STATUS FILTER", f"{len(query_results)} result sets")
+        filtered_results, any_filtered = filter_query_results(query_results)
+        if any_filtered:
+            total_raw      = sum(r.row_count for r in query_results)
+            total_filtered = sum(r.row_count for r in filtered_results)
+            logger.info(
+                f"🔍 STATUS FILTER APPLIED | "
+                f"raw_rows={total_raw} -> kept_rows={total_filtered}"
+            )
+        else:
+            logger.info("🔍 STATUS FILTER | no inactive rows removed")
+
+        # ── LLM answer generation (receives only active/open rows) ───────────
+        logger.step("STEP 7b / ANSWER GENERATION (LLM #3)", f"{len(filtered_results)} result sets")
         with Timer() as t:
             answer_resp = await self.answer_generator.generate_answer(
                 user_query=query,
-                query_results=query_results,
+                query_results=filtered_results,  # LLM only sees active rows
                 has_greeting=False,
                 target_language=None,   # NEVER pass language to LLM — Sarvam translates after
                 intent_note=intent_note,
                 keyword_hint=keyword_hint,
             )
-        logger.step_done("STEP 7 / ANSWER GENERATION", t.elapsed_ms,
+        logger.step_done("STEP 7b / ANSWER GENERATION", t.elapsed_ms,
                          chars=len(answer_resp.answer))
         logger.final_answer(answer_resp.answer, lang="en")
 
         return {
-            "answer": answer_resp.answer,
-            "sources": answer_resp.sources,
-            "query_results": query_results,
-            "selected_tools": selected_tools,
-            "cache_hit": cache_hit,
+            "answer":                 answer_resp.answer,
+            "sources":                answer_resp.sources,
+            "query_results":          query_results,          # raw — all rows from DB
+            "query_results_filtered": filtered_results,       # post-status-filter — what LLM saw
+            "selected_tools":         selected_tools,
+            "cache_hit":              cache_hit,
         }
 
     # ── SQL helpers ─────────────────────────────────────────────────────────────
@@ -601,6 +622,12 @@ RULES:
    Ahmedabad→અમદાવાદ, Surat→સુરત, Vadodara→વડોદરા, Rajkot→રાજકોટ,
    Mehsana→મહેસાણા, Gandhinagar→ગાંધીનગર, Anand→આણંદ, Bharuch→ભરૂચ,
    Junagadh→જૂનાગઢ, Bhavnagar→ભાવનગર, Jamnagar→જામનગર, Amreli→અમરેલી
+10. STATUS COLUMN — CRITICAL: NEVER add any status condition to WHERE clause for any table
+    EXCEPT kshop_products (rule 6 above). Do NOT add AND status = 'active', AND status = 1,
+    AND is_sold = 0, or any other status/availability filter on any other table.
+    Status filtering is handled automatically after data retrieval — adding it in SQL
+    will cause rows with valid non-'active' status values (e.g. sold_out, available)
+    to be silently excluded from results.
 
 OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
 [{{"table_name": "primary_table", "sql": "SELECT ... FROM ... WHERE ..."}}]"""
