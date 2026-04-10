@@ -1,0 +1,34 @@
+name: Deploy AI Chatbot
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: SSH into EC2 and deploy
+      - name: SSH into EC2 and deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            # Navigate to project directory
+            cd /home/ubuntu/Krushiratn/ai-chatbot
+
+            # Pull latest code from main branch
+            git pull origin main
+
+            # Activate virtual environment
+            source venv/bin/activate
+
+            # Install any new dependencies
+            pip install -r requirements.txt
+
+            # Restart the service to apply changes
+            sudo systemctl restart ai-chatbot
