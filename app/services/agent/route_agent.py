@@ -69,6 +69,9 @@ NAVIGATION
   - How to use the app / what features are available (step-by-step)
   - How to list an old item for sale / how does buy-sell process work
   - How to sell crops / pak vechuv kevi rite
+  - How to BUY CROPS from farmers (company role crop buying process)
+  - I want to buy crops / mane pak kharido / pak kharidu / maro pak kharidu
+  - How does a company purchase crops from a farmer
   - Where to find any screen or feature in the app
   - How to change language / settings
   - How to track an order
@@ -114,13 +117,21 @@ CRITICAL DISAMBIGUATION — these pairs are easy to confuse:
   "Which yards are in Rajkot taluka?" (specific lookup) → SQL
 
   "What crops are available in Krushi Ratn?" (overview list) → GENERAL
-  "Kapas bhav surat" (live price) → SQL
+  "Show crops in Krushi Ratn" (overview list — same as above!) → GENERAL
+  "List all crops" (overview list) → GENERAL
+  "What all crops are there?" (overview list) → GENERAL
+  "Kapas bhav surat" (live price for a SPECIFIC crop) → SQL
 
   "What products are in K-Shop?" (overview) → GENERAL
+  "Show K-Shop products avaliable in Krushiratna" (browsing product list) → SQL
   "Balwan Power Weeder price" (specific product price) → SQL
 
   "How does the AI chatbot work?" (overview) → GENERAL
-  "Show me kapas bhav" (live data) → SQL
+  "Show me kapas bhav" (live data for specific crop) → SQL
+
+  KEY RULE: "show/list CROPS" = GENERAL (overview), "show PRODUCTS/NEWS" = SQL (live data fetch).
+  The word "crops" without a specific crop name means the user wants a list of what's available,
+  not a database query. Specific crop names (kapas, wheat, bajra, ghau) with price words = SQL.
 
   "What should I do if I face app issues?" (guidance) → GENERAL
   "How do I contact support?" (step-by-step) → NAVIGATION
@@ -153,6 +164,12 @@ Examples:
   "how do i register in krushi ratn" → NAVIGATION
   "pak vechuv kevi rite" → NAVIGATION
   "maro pak kevi rite vechuv" → NAVIGATION
+  "i want to buy crops" → NAVIGATION
+  "mane pak kharido" → NAVIGATION
+  "mare pak kharida chhe" → NAVIGATION
+  "pak kharidu kevi rite" → NAVIGATION
+  "company thi crop kharidu" → NAVIGATION
+  "how to buy crops from farmer" → NAVIGATION
   "kshop thi product kevi rite kharidu" → NAVIGATION
   "order track kevi rite" → NAVIGATION
   "juna vastu kharidu kevi rite" → NAVIGATION
@@ -162,6 +179,11 @@ Examples:
   "krushi ratn ma shu kari shakay" → GENERAL
   "yard shu hoy" → GENERAL
   "kayi crops uplabdh che" → GENERAL
+  "show crops in krushiratna" → GENERAL
+  "show kshop products in krushiratna" → GENERAL
+  "list all crops" → GENERAL
+  "show me all crops" → GENERAL
+  "crops in krushi ratn" → GENERAL
   "app ma weight unit shu che" → GENERAL
   "buyer aavya par shu karvu" → GENERAL
   "kharidi karta pahela shu jovu" → GENERAL
