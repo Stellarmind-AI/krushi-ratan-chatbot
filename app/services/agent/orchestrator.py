@@ -21,7 +21,7 @@ import time
 from typing import List, Dict, Any, Optional
 
 from app.services.agent.route_agent    import get_route_agent, FlowType
-from app.services.agent.query_cache    import get_query_cache
+from app.services.agent.query_cache    import get_query_cache, STRIP_WORDS
 from app.services.agent.intent_router  import get_intent_router
 from app.services.agent.tool_selector  import get_tool_selector
 from app.services.agent.query_generator import get_query_generator
@@ -410,20 +410,36 @@ class Orchestrator:
                     logger.no_data_found("SQL", query)
                     return self._out_of_scope_response()
 
-        # ── STEP 5: SQL Generation (LLM #2, compact schema) ─────────────────
-        logger.step("STEP 5 / SQL GENERATION (LLM #2)", f"tables={selected_tools}")
-        with Timer() as t:
-            queries = await self._generate_sql_compact(
-                query, selected_tools,
-                keyword_hint=keyword_hint,
-                intent_note=intent_note,
+        # ── STEP 5: SQL Generation (LLM #2) OR Exploratory Fallback ──────
+        # Exploratory detection: strip all known filler/intent words AND domain
+        # words derived from the selected table names. If nothing meaningful
+        # remains (e.g. "what is kshop?", "what is buy sell?") → user is asking
+        # a general "what is this?" question, not searching for a specific item.
+        # In that case: skip the LLM entirely and generate a simple recent-records
+        # fallback query for the primary table. No LLM call = no hallucinated filter.
+        if self._is_exploratory_query(query, selected_tools):
+            primary_table = selected_tools[0].replace("query_", "")
+            compiled      = self._compiled_schemas.get(primary_table, "")
+            fallback_q    = self._build_exploratory_sql(primary_table, compiled)
+            queries       = [fallback_q]
+            logger.info(
+                f"🔍 EXPLORATORY QUERY DETECTED | skipped LLM SQL | "
+                f"fallback table={primary_table} | sql={fallback_q['sql'][:80]}"
             )
-        logger.step_done("STEP 5 / SQL GENERATION", t.elapsed_ms,
-                         queries_count=len(queries))
+        else:
+            logger.step("STEP 5 / SQL GENERATION (LLM #2)", f"tables={selected_tools}")
+            with Timer() as t:
+                queries = await self._generate_sql_compact(
+                    query, selected_tools,
+                    keyword_hint=keyword_hint,
+                    intent_note=intent_note,
+                )
+            logger.step_done("STEP 5 / SQL GENERATION", t.elapsed_ms,
+                             queries_count=len(queries))
 
-        if not queries:
-            logger.warning("SQL generation returned no queries")
-            return self._out_of_scope_response()
+            if not queries:
+                logger.warning("SQL generation returned no queries")
+                return self._out_of_scope_response()
 
         for q in queries:
             logger.sql_generation(q.get("sql", ""), q.get("table_name", ""))
@@ -708,6 +724,55 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
         if isinstance(parsed, list):
             return [x for x in parsed if x in available]
         return []
+
+    # ── Exploratory query helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _is_exploratory_query(query: str, selected_tools: list) -> bool:
+        # Return True when the query has no specific item/product keyword to
+        # search for — i.e. the user is asking "what is X?" rather than
+        # "find product Y in X".
+        #
+        # Algorithm:
+        #   1. Lowercase + strip punctuation
+        #   2. Build domain_words from selected_tools table name components
+        #      e.g. query_buy_sell_products -> {buy, sell, products}
+        #   3. Combine STRIP_WORDS + domain_words into one exclusion set
+        #   4. If no word survives exclusion (length > 1) -> exploratory
+        import re as _re
+        q_clean = _re.sub(r"[^\w\s]", " ", query.lower())
+        words   = q_clean.split()
+
+        # Extract component words from every selected table name
+        domain_words: set = set()
+        for tool in (selected_tools or []):
+            table = tool.replace("query_", "").replace("_", " ")
+            for w in table.split():
+                if len(w) > 1:
+                    domain_words.add(w)
+
+        exclusion = STRIP_WORDS | domain_words
+        meaningful = [w for w in words if w not in exclusion and len(w) > 1]
+        return len(meaningful) == 0
+
+    @staticmethod
+    def _build_exploratory_sql(primary_table: str, compiled_schema: str) -> dict:
+        # Build a simple recent-records fallback SQL for exploratory queries.
+        # Fetches the 10 most recently created rows with no keyword filter.
+        # Respects soft-delete and kshop_products status rule.
+        clauses = []
+        if "deleted_at" in (compiled_schema or ""):
+            clauses.append(f"{primary_table}.deleted_at IS NULL")
+        if primary_table == "kshop_products":
+            clauses.append(f"{primary_table}.status = 1")
+
+        where = " AND ".join(clauses) if clauses else "1=1"
+        sql   = (
+            f"SELECT * FROM {primary_table} "
+            f"WHERE {where} "
+            f"ORDER BY {primary_table}.created_at DESC LIMIT 10"
+        )
+        return {"table_name": primary_table, "sql": sql}
 
     def _is_specific(self, result) -> bool:
         sql = getattr(result, "sql", "") or getattr(result, "query", "") or ""

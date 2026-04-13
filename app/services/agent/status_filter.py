@@ -38,6 +38,7 @@ KEEP_VALUES = {
     "available",
     "running",
     "confirmed",
+    "published",
 }
 
 
