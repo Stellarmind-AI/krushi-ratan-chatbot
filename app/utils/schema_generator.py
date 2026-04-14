@@ -233,12 +233,19 @@ class SchemaGenerator:
     """Generates condensed schema and tool files from full_schema.json."""
 
     def __init__(self, full_schema_path: str, schemas_dir: str, tools_dir: str):
-        self.full_schema_path    = full_schema_path
-        self.schemas_dir         = schemas_dir
-        self.tools_dir           = tools_dir
-        self.condensed_schema_path = os.path.join(schemas_dir, "condensed_schema.json")
-        Path(schemas_dir).mkdir(parents=True, exist_ok=True)
-        Path(tools_dir).mkdir(parents=True, exist_ok=True)
+        # Resolve to ABSOLUTE paths at construction time so later operations
+        # work regardless of cwd changes (uvicorn reloader, threading, etc.)
+        self.full_schema_path      = os.path.abspath(full_schema_path)
+        self.schemas_dir           = os.path.abspath(schemas_dir)
+        self.tools_dir             = os.path.abspath(tools_dir)
+        self.condensed_schema_path = os.path.join(self.schemas_dir, "condensed_schema.json")
+        Path(self.schemas_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.tools_dir).mkdir(parents=True, exist_ok=True)
+        logger.info(
+            f"🗂️  SchemaGenerator paths resolved | "
+            f"tools_dir={self.tools_dir} | schemas_dir={self.schemas_dir}"
+        )
+        
 
     def load_full_schema(self) -> Dict[str, Any]:
         try:
@@ -451,7 +458,20 @@ class SchemaGenerator:
             table_name = tool_file.stem.replace("_tool", "")
             with open(tool_file, 'r', encoding='utf-8') as f:
                 tools[table_name] = json.load(f)
-        logger.info(f"📖 Loaded {len(tools)} tools")
+
+        # Defensive diagnostic: if we loaded zero but the directory exists,
+        # log loudly so the path mismatch is immediately visible.
+        if not tools:
+            logger.warning(
+                f"⚠️  load_all_tools() loaded 0 tools | "
+                f"tools_dir={self.tools_dir} | "
+                f"cwd={os.getcwd()} | "
+                f"dir_exists={os.path.isdir(self.tools_dir)} | "
+                f"files_in_dir={len(list(Path(self.tools_dir).glob('*'))) if os.path.isdir(self.tools_dir) else 0}"
+            )
+        else:
+            logger.info(f"📖 Loaded {len(tools)} tools from {self.tools_dir}")
+
         return tools
 
     def get_available_tool_names(self) -> List[str]:
@@ -459,6 +479,11 @@ class SchemaGenerator:
         for tool_file in Path(self.tools_dir).glob("*_tool.json"):
             table_name = tool_file.stem.replace("_tool", "")
             tools.append(f"query_{table_name}")
+        if not tools:
+            logger.warning(
+                f"⚠️  get_available_tool_names() returned empty | "
+                f"tools_dir={self.tools_dir} | cwd={os.getcwd()}"
+            )
         return sorted(tools)
 
 
