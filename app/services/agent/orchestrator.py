@@ -21,12 +21,13 @@ import time
 from typing import List, Dict, Any, Optional
 
 from app.services.agent.route_agent    import get_route_agent, FlowType
-from app.services.agent.query_cache    import get_query_cache
+from app.services.agent.query_cache    import get_query_cache, STRIP_WORDS
 from app.services.agent.intent_router  import get_intent_router
 from app.services.agent.tool_selector  import get_tool_selector
 from app.services.agent.query_generator import get_query_generator
 from app.services.agent.answer_generator import get_answer_generator
 from app.services.agent.knowledge_handler import get_knowledge_handler
+from app.services.agent.status_filter     import filter_query_results
 from app.services.database.query_executor import get_query_executor
 from app.utils.schema_generator        import SchemaGenerator
 from app.services.llm.manager          import get_llm_manager
@@ -409,20 +410,36 @@ class Orchestrator:
                     logger.no_data_found("SQL", query)
                     return self._out_of_scope_response()
 
-        # ── STEP 5: SQL Generation (LLM #2, compact schema) ─────────────────
-        logger.step("STEP 5 / SQL GENERATION (LLM #2)", f"tables={selected_tools}")
-        with Timer() as t:
-            queries = await self._generate_sql_compact(
-                query, selected_tools,
-                keyword_hint=keyword_hint,
-                intent_note=intent_note,
+        # ── STEP 5: SQL Generation (LLM #2) OR Exploratory Fallback ──────
+        # Exploratory detection: strip all known filler/intent words AND domain
+        # words derived from the selected table names. If nothing meaningful
+        # remains (e.g. "what is kshop?", "what is buy sell?") → user is asking
+        # a general "what is this?" question, not searching for a specific item.
+        # In that case: skip the LLM entirely and generate a simple recent-records
+        # fallback query for the primary table. No LLM call = no hallucinated filter.
+        if self._is_exploratory_query(query, selected_tools):
+            primary_table = selected_tools[0].replace("query_", "")
+            compiled      = self._compiled_schemas.get(primary_table, "")
+            fallback_q    = self._build_exploratory_sql(primary_table, compiled)
+            queries       = [fallback_q]
+            logger.info(
+                f"🔍 EXPLORATORY QUERY DETECTED | skipped LLM SQL | "
+                f"fallback table={primary_table} | sql={fallback_q['sql'][:80]}"
             )
-        logger.step_done("STEP 5 / SQL GENERATION", t.elapsed_ms,
-                         queries_count=len(queries))
+        else:
+            logger.step("STEP 5 / SQL GENERATION (LLM #2)", f"tables={selected_tools}")
+            with Timer() as t:
+                queries = await self._generate_sql_compact(
+                    query, selected_tools,
+                    keyword_hint=keyword_hint,
+                    intent_note=intent_note,
+                )
+            logger.step_done("STEP 5 / SQL GENERATION", t.elapsed_ms,
+                             queries_count=len(queries))
 
-        if not queries:
-            logger.warning("SQL generation returned no queries")
-            return self._out_of_scope_response()
+            if not queries:
+                logger.warning("SQL generation returned no queries")
+                return self._out_of_scope_response()
 
         for q in queries:
             logger.sql_generation(q.get("sql", ""), q.get("table_name", ""))
@@ -475,27 +492,47 @@ class Orchestrator:
         LLM call #3 — generate ENGLISH answer from DB rows.
         NO language instruction given to LLM. Always English output.
         Translation to user language is handled by chat_handler after this.
+
+        Status filter is applied here (post-SQL, pre-LLM):
+          - query_results          -> raw rows from DB (all statuses)
+          - query_results_filtered -> rows with inactive/closed statuses removed
+          LLM only sees filtered rows. Frontend receives both.
         """
-        logger.step("STEP 7 / ANSWER GENERATION (LLM #3)", f"{len(query_results)} result sets")
+        # ── Status filter (post-SQL, pre-LLM) ───────────────────────────────
+        logger.step("STEP 7a / STATUS FILTER", f"{len(query_results)} result sets")
+        filtered_results, any_filtered = filter_query_results(query_results)
+        if any_filtered:
+            total_raw      = sum(r.row_count for r in query_results)
+            total_filtered = sum(r.row_count for r in filtered_results)
+            logger.info(
+                f"🔍 STATUS FILTER APPLIED | "
+                f"raw_rows={total_raw} -> kept_rows={total_filtered}"
+            )
+        else:
+            logger.info("🔍 STATUS FILTER | no inactive rows removed")
+
+        # ── LLM answer generation (receives only active/open rows) ───────────
+        logger.step("STEP 7b / ANSWER GENERATION (LLM #3)", f"{len(filtered_results)} result sets")
         with Timer() as t:
             answer_resp = await self.answer_generator.generate_answer(
                 user_query=query,
-                query_results=query_results,
+                query_results=filtered_results,  # LLM only sees active rows
                 has_greeting=False,
                 target_language=None,   # NEVER pass language to LLM — Sarvam translates after
                 intent_note=intent_note,
                 keyword_hint=keyword_hint,
             )
-        logger.step_done("STEP 7 / ANSWER GENERATION", t.elapsed_ms,
+        logger.step_done("STEP 7b / ANSWER GENERATION", t.elapsed_ms,
                          chars=len(answer_resp.answer))
         logger.final_answer(answer_resp.answer, lang="en")
 
         return {
-            "answer": answer_resp.answer,
-            "sources": answer_resp.sources,
-            "query_results": query_results,
-            "selected_tools": selected_tools,
-            "cache_hit": cache_hit,
+            "answer":                 answer_resp.answer,
+            "sources":                answer_resp.sources,
+            "query_results":          query_results,          # raw — all rows from DB
+            "query_results_filtered": filtered_results,       # post-status-filter — what LLM saw
+            "selected_tools":         selected_tools,
+            "cache_hit":              cache_hit,
         }
 
     # ── SQL helpers ─────────────────────────────────────────────────────────────
@@ -601,6 +638,12 @@ RULES:
    Ahmedabad→અમદાવાદ, Surat→સુરત, Vadodara→વડોદરા, Rajkot→રાજકોટ,
    Mehsana→મહેસાણા, Gandhinagar→ગાંધીનગર, Anand→આણંદ, Bharuch→ભરૂચ,
    Junagadh→જૂનાગઢ, Bhavnagar→ભાવનગર, Jamnagar→જામનગર, Amreli→અમરેલી
+10. STATUS COLUMN — CRITICAL: NEVER add any status condition to WHERE clause for any table
+    EXCEPT kshop_products (rule 6 above). Do NOT add AND status = 'active', AND status = 1,
+    AND is_sold = 0, or any other status/availability filter on any other table.
+    Status filtering is handled automatically after data retrieval — adding it in SQL
+    will cause rows with valid non-'active' status values (e.g. sold_out, available)
+    to be silently excluded from results.
 
 OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
 [{{"table_name": "primary_table", "sql": "SELECT ... FROM ... WHERE ..."}}]"""
@@ -681,6 +724,55 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
         if isinstance(parsed, list):
             return [x for x in parsed if x in available]
         return []
+
+    # ── Exploratory query helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _is_exploratory_query(query: str, selected_tools: list) -> bool:
+        # Return True when the query has no specific item/product keyword to
+        # search for — i.e. the user is asking "what is X?" rather than
+        # "find product Y in X".
+        #
+        # Algorithm:
+        #   1. Lowercase + strip punctuation
+        #   2. Build domain_words from selected_tools table name components
+        #      e.g. query_buy_sell_products -> {buy, sell, products}
+        #   3. Combine STRIP_WORDS + domain_words into one exclusion set
+        #   4. If no word survives exclusion (length > 1) -> exploratory
+        import re as _re
+        q_clean = _re.sub(r"[^\w\s]", " ", query.lower())
+        words   = q_clean.split()
+
+        # Extract component words from every selected table name
+        domain_words: set = set()
+        for tool in (selected_tools or []):
+            table = tool.replace("query_", "").replace("_", " ")
+            for w in table.split():
+                if len(w) > 1:
+                    domain_words.add(w)
+
+        exclusion = STRIP_WORDS | domain_words
+        meaningful = [w for w in words if w not in exclusion and len(w) > 1]
+        return len(meaningful) == 0
+
+    @staticmethod
+    def _build_exploratory_sql(primary_table: str, compiled_schema: str) -> dict:
+        # Build a simple recent-records fallback SQL for exploratory queries.
+        # Fetches the 10 most recently created rows with no keyword filter.
+        # Respects soft-delete and kshop_products status rule.
+        clauses = []
+        if "deleted_at" in (compiled_schema or ""):
+            clauses.append(f"{primary_table}.deleted_at IS NULL")
+        if primary_table == "kshop_products":
+            clauses.append(f"{primary_table}.status = 1")
+
+        where = " AND ".join(clauses) if clauses else "1=1"
+        sql   = (
+            f"SELECT * FROM {primary_table} "
+            f"WHERE {where} "
+            f"ORDER BY {primary_table}.created_at DESC LIMIT 10"
+        )
+        return {"table_name": primary_table, "sql": sql}
 
     def _is_specific(self, result) -> bool:
         sql = getattr(result, "sql", "") or getattr(result, "query", "") or ""

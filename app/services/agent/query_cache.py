@@ -47,7 +47,9 @@ _CACHE_FILE = _CACHE_DIR / "query_cache.json"
 # Stripping them means "balwan weeder joiyu" and "balwan weeder apo"
 # both resolve to the same normalized key: "balwan weeder"
 # ─────────────────────────────────────────────────────────────────────────────
-_STRIP_WORDS = {
+# Public — imported by orchestrator for exploratory query detection.
+# Extend here when new filler/intent words are discovered.
+STRIP_WORDS = {
     # Gujarati intent/filler
     "mare", "maro", "mari", "mara", "mane",
     "karvu", "karvani", "karvo", "karu", "karshu",
@@ -67,9 +69,16 @@ _STRIP_WORDS = {
     "get", "find", "give", "fetch", "list", "display",
     "what", "is", "are", "the", "a", "an",
     "of", "in", "at", "for", "to", "my", "about",
-    "purchase", "buy", "from", "kshop",
+    "purchase", "buy", "sell", "from", "kshop",
     "can", "you", "could", "would", "help",
+    # Pure question / meta words — never product keywords
+    "explain", "how", "does", "do", "why", "when",
+    "which", "who", "mean", "means", "meaning",
+    "describe", "understand", "know", "say",
 }
+
+# Keep internal alias so existing code inside this file still works
+_STRIP_WORDS = STRIP_WORDS
 
 
 @dataclass

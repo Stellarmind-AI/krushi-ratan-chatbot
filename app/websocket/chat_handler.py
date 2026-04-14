@@ -292,21 +292,22 @@ class ChatHandler:
         history.messages.append(ChatMessage(role="assistant", content=final_answer))
         history.updated_at = datetime.now()
 
-        kshop_payload = self._build_kshop_payload(result)
+        query_data          = self._build_query_data(result, key="query_results")
+        query_data_filtered = self._build_query_data(result, key="query_results_filtered")
 
         try:
             text_msg = {
-                "type":        "text_output",
-                "text":        final_answer,
-                "is_complete": True,
-                "sources":     _safe_serialize(result.get("sources", [])),
-                "flow":        result.get("flow", "SQL"),
-                "lang_type":   lang_type,
-                "cache_hit":   result.get("cache_hit", False),
-                "timestamp":   datetime.now().isoformat(),
+                "type":                "text_output",
+                "text":                final_answer,
+                "is_complete":         True,
+                "sources":             _safe_serialize(result.get("sources", [])),
+                "flow":                result.get("flow", "SQL"),
+                "lang_type":           lang_type,
+                "cache_hit":           result.get("cache_hit", False),
+                "timestamp":           datetime.now().isoformat(),
+                "query_data":          _safe_serialize(query_data),
+                "query_data_filtered": _safe_serialize(query_data_filtered),
             }
-            if kshop_payload:
-                text_msg["kshop_data"] = _safe_serialize(kshop_payload)
             await ws.send_text(json.dumps(text_msg, ensure_ascii=False))
         except Exception as e:
             logger.error_with_context(e, {"action": "send_text_output"})
@@ -315,33 +316,29 @@ class ChatHandler:
                 "is_complete": True, "timestamp": datetime.now().isoformat()
             }, ensure_ascii=False))
 
-        if kshop_payload:
-            try:
-                await ws.send_text(json.dumps({
-                    "type": "kshop_products", "button_type": "product_view",
-                    "products": _safe_serialize(kshop_payload), "count": len(kshop_payload),
-                    "timestamp": datetime.now().isoformat(),
-                }, ensure_ascii=False))
-            except Exception as e:
-                logger.warning(f"kshop_products send failed: {e}")
-
         total_ms = (time.perf_counter() - pipeline_start) * 1000
         logger.info("PIPELINE COMPLETE", total_ms=f"{total_ms:.0f}ms",
                     flow=result.get("flow"), lang_type=lang_type,
                     cached=result.get("cache_hit", False))
 
     @staticmethod
-    def _build_kshop_payload(result: dict) -> list:
-        products = []
-        for qr in result.get("query_results", []):
+    def _build_query_data(result: dict, key: str = "query_results") -> dict:
+        """
+        Build a structured dict of raw DB rows keyed by table name.
+
+        key  — which result list to read from the orchestrator result dict:
+                "query_results"          -> raw rows (all statuses)
+                "query_results_filtered" -> rows after status filter (what LLM saw)
+
+        Returns {} for NAVIGATION / GENERAL / GREETING flows (no DB query runs).
+        """
+        query_data = {}
+        for qr in result.get(key, []):
             table = getattr(qr, "table_name", None) or (qr.get("table_name") if isinstance(qr, dict) else None) or ""
             rows  = getattr(qr, "rows", None) or (qr.get("rows") if isinstance(qr, dict) else None) or []
-            if "kshop" in table.lower():
-                for row in rows:
-                    p = dict(row) if isinstance(row, dict) else {}
-                    p["button_type"] = "product_view"
-                    products.append(p)
-        return products
+            if table and rows:
+                query_data[table] = [dict(row) if isinstance(row, dict) else row for row in rows]
+        return query_data
 
     @staticmethod
     async def _send_error(ws: WebSocket, error: str):
