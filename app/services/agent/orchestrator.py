@@ -23,8 +23,7 @@ from typing import List, Dict, Any, Optional
 from app.services.agent.route_agent    import get_route_agent, FlowType
 from app.services.agent.query_cache    import get_query_cache, STRIP_WORDS
 from app.services.agent.intent_router  import get_intent_router
-from app.services.agent.tool_selector  import get_tool_selector
-from app.services.agent.query_generator import get_query_generator
+from app.services.agent.tool_selector  import get_tool_selector, build_fk_deps_from_tools
 from app.services.agent.answer_generator import get_answer_generator
 from app.services.agent.knowledge_handler import get_knowledge_handler
 from app.services.agent.status_filter     import filter_query_results
@@ -52,7 +51,6 @@ class Orchestrator:
         self.query_cache       = get_query_cache()
         self.intent_router     = get_intent_router()
         self.tool_selector     = get_tool_selector()
-        self.query_generator   = get_query_generator()
         self.answer_generator  = get_answer_generator()
         self.knowledge_handler = get_knowledge_handler()
         self.query_executor    = get_query_executor()
@@ -80,6 +78,10 @@ class Orchestrator:
                     for t in tables if "name" in t
                 }
             self._build_compiled_schemas()
+            # Derive FK dependency graph from tool JSON relationships and
+            # install it on the tool selector. Single source of truth: tool JSONs.
+            fk_deps = build_fk_deps_from_tools(self.all_tools or {})
+            self.tool_selector.set_fk_deps(fk_deps)
         logger.step_done("ORCHESTRATOR LOAD", t.elapsed_ms,
                          tables=self.condensed_schema.get("total_tables"),
                          tools=len(self.all_tools) or len(self._virtual_tools),

@@ -15,39 +15,29 @@ logger = get_agent_logger()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FK DEPENDENCY CHAINS
-# When you pick a table, you MUST also pick these tables for JOINs.
-# Built from the real tool files.
+# Derived at startup from each tool JSON's `relationships` field.
+# Orchestrator calls set_fk_deps() after loading tools.
+# Source of truth: app/schemas/tools/*.json
 # ══════════════════════════════════════════════════════════════════════════════
-FK_DEPS: Dict[str, List[str]] = {
-    "kshop_products":         ["kshop_companies", "kshop_categories", "kshop_weights"],
-    "kshop_orders":           ["kshop_products", "kshop_companies", "kshop_categories", "order_statuses", "users"],
-    "kshop_category_company": ["kshop_companies", "kshop_categories"],
-    "buy_sell_products":      ["buy_sell_categories", "users"],
-    "buy_sell_orders":        ["buy_sell_products", "users"],
-    "buy_sell_category_fields": ["buy_sell_categories"],
-    "buy_sell_category_steps":  ["buy_sell_categories"],
-    "products":               ["sub_categories", "yards", "weights"],
-    "yards":                  ["cities", "states", "talukas"],
-    "cities":                 ["states"],
-    "talukas":                ["cities"],
-    "news":                   ["cities", "states", "talukas"],
-    "seeds":                  ["sub_categories"],
-    "sub_categories":         ["categories"],
-    "farmer_orders":          ["users", "kshop_companies", "sub_categories", "weights", "order_statuses"],
-    "company_orders":         ["farmer_orders", "users", "sub_categories", "weights", "order_statuses"],
-    "video_posts":            ["users", "video_categories"],
-    "video_comments":         ["video_posts", "users"],
-    "video_likes":            ["video_posts", "users"],
-    "video_saves":            ["video_posts", "users"],
-    "video_shares":           ["video_posts", "users"],
-    "video_views":            ["video_posts", "users"],
-    "video_comment_likes":    ["video_comments", "users"],
-    "user_products":          ["sub_categories", "users"],
-    "user_subcategories":     ["sub_categories", "users"],
-    "user_talukas":           ["users", "talukas"],
-    "user_video_categories":  ["users", "video_categories"],
-    "users":                  ["states", "cities"],
-}
+def build_fk_deps_from_tools(tools: Dict[str, Dict[str, Any]]) -> Dict[str, List[str]]:
+    """
+    Compute direct FK dependency map from loaded tool JSON files.
+    For each table, lists the referenced tables (deduped, order preserved)
+    from its `relationships` field. Self-references are kept.
+    """
+    deps: Dict[str, List[str]] = {}
+    for tname, tool in (tools or {}).items():
+        refs: List[str] = []
+        for rel in tool.get("relationships", []):
+            ref = rel.get("references", "")
+            if not ref or "." not in ref:
+                continue
+            ref_table = ref.split(".", 1)[0]
+            if ref_table and ref_table not in refs:
+                refs.append(ref_table)
+        if refs:
+            deps[tname] = refs
+    return deps
 
 # Intent words to strip when doing keyword-based topic detection
 INTENT_WORDS = {
@@ -80,6 +70,15 @@ class ToolSelector:
 
     def __init__(self):
         self.llm_manager = get_llm_manager()
+        # Populated by orchestrator at startup via set_fk_deps() once tool
+        # JSON files are loaded. Empty until then — selection still works,
+        # just without FK dependency auto-expansion.
+        self.fk_deps: Dict[str, List[str]] = {}
+
+    def set_fk_deps(self, fk_deps: Dict[str, List[str]]) -> None:
+        """Install the FK dependency map (built from tool JSON relationships)."""
+        self.fk_deps = dict(fk_deps or {})
+        logger.info(f"🔗 FK deps installed for {len(self.fk_deps)} tables")
 
     async def select_tools(
         self,
@@ -122,7 +121,7 @@ class ToolSelector:
 
         # Format FK dependency chains for the prompt
         dep_lines = []
-        for table, deps in FK_DEPS.items():
+        for table, deps in self.fk_deps.items():
             tool_name = f"query_{table}"
             if tool_name in available_tools:
                 dep_str = ", ".join(f"query_{d}" for d in deps if f"query_{d}" in available_tools)
@@ -215,7 +214,7 @@ Return ONLY the JSON array."""
             expanded = list(validated)
             for tool in validated:
                 table = tool.replace("query_", "")
-                for dep_table in FK_DEPS.get(table, []):
+                for dep_table in self.fk_deps.get(table, []):
                     dep_tool = f"query_{dep_table}"
                     if dep_tool in available_set and dep_tool not in expanded:
                         expanded.append(dep_tool)
