@@ -92,6 +92,11 @@ class Orchestrator:
         Pre-compile compact per-table schema strings ONCE at startup.
         Avoids rebuilding full schema text on every query.
         Only columns+types+joins — strips verbose descriptions.
+
+        JOINS are rendered as ready-to-paste SQL JOIN clauses so the LLM
+        does not have to translate arrow-notation into SQL syntax. Every
+        clause uses <table>.<col> = <ref_table>.<ref_col> form, matching
+        the alias-free style the LLM can then adapt with aliases.
         """
         for tname, tool in (self.all_tools or {}).items():
             cols = tool.get("columns", [])
@@ -99,20 +104,33 @@ class Orchestrator:
                 f"{c['name']}:{c['type'].split('(')[0]}"
                 for c in cols
             )
+
+            # Build explicit SQL JOIN clauses from each relationship.
+            # "references" is of the form "<ref_table>.<ref_col>".
             rels = tool.get("relationships", [])
-            rel_str = " | ".join(
-                f"{r['column']}->{r['references']}[{r.get('join_type', 'JOIN')}]"
-                for r in rels
-            ) if rels else "none"
+            join_lines: List[str] = []
+            for r in rels:
+                col = r.get("column", "")
+                ref = r.get("references", "")
+                if not col or not ref or "." not in ref:
+                    continue
+                ref_table, ref_col = ref.split(".", 1)
+                join_kw = r.get("join_type", "JOIN")
+                join_lines.append(
+                    f"    {join_kw} {ref_table} ON {tname}.{col} = {ref_table}.{ref_col}"
+                )
+            joins_block = "\n".join(join_lines) if join_lines else "    (no foreign keys)"
+
             notes = [
                 n for n in tool.get("notes", [])
                 if "deleted_at" in n or "status" in n or "STRIP" in n or "keyword" in n.lower()
             ]
             note_str = " | ".join(notes) if notes else ""
+
             self._compiled_schemas[tname] = (
                 f"TABLE {tname}:\n"
                 f"  COLUMNS: {col_str}\n"
-                f"  JOINS: {rel_str}\n"
+                f"  JOINS:\n{joins_block}\n"
                 + (f"  RULES: {note_str}\n" if note_str else "")
             )
         logger.info(f"📋 Pre-compiled {len(self._compiled_schemas)} table schemas")
@@ -627,7 +645,14 @@ RULES:
 2. Search each keyword INDEPENDENTLY with OR — never use full phrase LIKE
 3. For product names: search both English and Gujarati script
    Examples: balwan+બલવાન, weeder+વીડર, kapas+કપાસ, pump+પંપ
-4. Use JOINS as specified in JOINS field — JOIN vs LEFT JOIN exactly as shown
+4. JOINS — MANDATORY: for every primary table that has entries under its JOINS block,
+   (a) copy those JOIN clauses verbatim into your FROM clause (JOIN vs LEFT JOIN exactly as shown),
+   (b) in the SELECT list, return the joined tables' descriptive columns
+       (e.g. yards.name, sub_categories.name, cities.name, kshop_companies.name)
+       instead of raw foreign-key IDs (yard_id, subcategory_id, city_id, kshop_company_id).
+   Never return a *_id column to the user when the referenced table is listed as a JOIN target.
+   Short aliases are fine (p, y, sc, c, kp, kco, kc, kw, bp, u, n, vp), but every JOIN from
+   the JOINS block MUST appear whenever the referenced table has a name/title/display_name column.
 5. Always add: WHERE <table>.deleted_at IS NULL  (for tables that have deleted_at)
 6. For kshop_products: always add AND status = 1
 7. NEVER generate SELECT * without WHERE clause
