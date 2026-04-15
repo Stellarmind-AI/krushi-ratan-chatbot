@@ -149,29 +149,57 @@ async def detect_language_google(text: str) -> str:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Romanized Gujarati signal words
-# Used when Google says "en" to distinguish Romanized Gujarati from real English
+# Used when Google says "en" to distinguish Romanized Gujarati from real English.
+#
+# TIERED to prevent false positives on English questions about the app:
+#
+#   STRONG signals — Gujarati-only verbs/particles/question words.
+#                    Almost never appear in English. ONE match triggers.
+#
+#   WEAK   signals — crop names, farming nouns. Common in Indian English too
+#                    (e.g. "what is mandi bhav"). Need 2+ matches to trigger.
+#
+#   REMOVED — App/brand proper nouns ("krushiratn", "kshop", "suvidha", "krushi")
+#             must NEVER be signals. English users naturally type the app name
+#             (e.g. "show crops in krushiratn") and that should stay English.
 # ─────────────────────────────────────────────────────────────────────────────
-_ROMANIZED_SIGNALS = {
+_ROMANIZED_STRONG_SIGNALS = {
     # Verbs / connectors only Gujarati uses
     "che", "chhe", "karvu", "karo", "kevi rite", "kevi",
     "joi", "joiyu", "levu", "vechuv", "vecho", "batao",
-    # Pronouns/particles
+    # Pronouns / particles
     "mare", "maro", "mane", "tame",
-    # Key nouns not in English
-    "bhav", "mandi", "samachar", "khabar", "krushi",
-    "kapas", "bajri", "magfali", "bhens", "balwan", "balwaan",
-    "khedut", "kisan", "jamin",
     # Question words
     "shu", "kyay", "kem", "ketla",
-    # App words
-    "kshop", "krushiratn", "suvidha",
+}
+
+_ROMANIZED_WEAK_SIGNALS = {
+    # Crop / farming nouns — also used in Indian English, so require 2+
+    "bhav", "mandi", "samachar", "khabar",
+    "kapas", "bajri", "magfali", "bhens", "balwan", "balwaan",
+    "khedut", "kisan", "jamin",
 }
 
 def _has_romanized_signals(text_lower: str) -> bool:
-    """Return True if text contains Romanized Gujarati signal words."""
-    for signal in _ROMANIZED_SIGNALS:
+    """
+    Return True if text contains Romanized Gujarati signals.
+    - Any STRONG signal       → True
+    - 2 or more WEAK signals  → True
+    Otherwise                 → False (treat as English).
+    """
+    # Strong signals: any single match flips it
+    for signal in _ROMANIZED_STRONG_SIGNALS:
         if re.search(r"(?<![a-z])" + re.escape(signal) + r"(?![a-z])", text_lower):
             return True
+
+    # Weak signals: count distinct matches, require 2+
+    weak_hits = 0
+    for signal in _ROMANIZED_WEAK_SIGNALS:
+        if re.search(r"(?<![a-z])" + re.escape(signal) + r"(?![a-z])", text_lower):
+            weak_hits += 1
+            if weak_hits >= 2:
+                return True
+
     return False
 
 
