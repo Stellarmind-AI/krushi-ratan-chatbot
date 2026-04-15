@@ -29,16 +29,17 @@ from app.core.logger import get_logger
 logger = get_logger("language_processor")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Gujarati unicode range — used as fallback detection only
+# Indic unicode ranges — used as fallback detection only
 # ─────────────────────────────────────────────────────────────────────────────
-_GUJARATI_RANGE = (0x0A80, 0x0AFF)
-_GUJARATI_THRESHOLD = 0.15   # 15% Gujarati chars = Gujarati script input
+_GUJARATI_RANGE   = (0x0A80, 0x0AFF)   # Gujarati script
+_DEVANAGARI_RANGE = (0x0900, 0x097F)   # Devanagari script (Hindi, Marathi, etc.)
+_SCRIPT_THRESHOLD = 0.15   # 15% chars in a given script = that script's input
 
 
 def _detect_by_unicode(text: str) -> Optional[str]:
     """
     Fallback detection using unicode range.
-    Returns "gujarati_script", "english", or None (unknown).
+    Returns "gujarati_script", "hindi_script", "english", or None (unknown).
     """
     total_alpha = sum(1 for c in text if c.isalpha())
     if total_alpha == 0:
@@ -48,8 +49,15 @@ def _detect_by_unicode(text: str) -> Optional[str]:
         1 for c in text
         if _GUJARATI_RANGE[0] <= ord(c) <= _GUJARATI_RANGE[1]
     )
-    if (gujarati_chars / total_alpha) >= _GUJARATI_THRESHOLD:
+    if (gujarati_chars / total_alpha) >= _SCRIPT_THRESHOLD:
         return "gujarati_script"
+
+    devanagari_chars = sum(
+        1 for c in text
+        if _DEVANAGARI_RANGE[0] <= ord(c) <= _DEVANAGARI_RANGE[1]
+    )
+    if (devanagari_chars / total_alpha) >= _SCRIPT_THRESHOLD:
+        return "hindi_script"   # Devanagari → assume Hindi (most common)
 
     return None  # Cannot determine — could be Romanized Gujarati or English
 
@@ -60,6 +68,7 @@ async def detect_language_google(text: str) -> str:
 
     Returns one of:
       "gujarati_script"    — Google detected "gu" (Gujarati)
+      "hindi_script"       — Google detected "hi" (Hindi, Devanagari script)
       "romanized_gujarati" — Google detected "en" but text has Gujarati signal words
                              (Romanized Gujarati looks like English to Google)
       "english"            — Google detected "en" with no Gujarati signals
@@ -98,14 +107,19 @@ async def detect_language_google(text: str) -> str:
                 if detected == "gu":
                     return "gujarati_script"
 
+                # Hindi → return as hindi_script (THE FIX)
+                if detected == "hi":
+                    return "hindi_script"
+
                 # Google says "en" — could be Romanized Gujarati
                 # Check for Gujarati-specific Romanized signal words
                 if detected == "en" and _has_romanized_signals(text.lower()):
                     return "romanized_gujarati"
 
-                # Hindi/Marathi/other Indian scripts → treat as non-English
-                if detected in ("hi", "mr", "pa", "bn", "te", "ta", "kn", "ml", "ur"):
-                    return "gujarati_script"  # handle similarly — pass to pipeline as-is
+                # Other Indian scripts (Marathi/Punjabi/Bengali/etc.) → treat as Gujarati
+                # (existing behavior preserved — change later if you add support for those)
+                if detected in ("mr", "pa", "bn", "te", "ta", "kn", "ml", "ur"):
+                    return "gujarati_script"
 
                 return "english"
 
@@ -123,6 +137,8 @@ async def detect_language_google(text: str) -> str:
     unicode_result = _detect_by_unicode(text)
     if unicode_result == "gujarati_script":
         return "gujarati_script"
+    if unicode_result == "hindi_script":
+        return "hindi_script"
 
     # For Latin-script text, check Romanized signals
     if _has_romanized_signals(text.lower()):
@@ -177,6 +193,19 @@ def normalize_gujarati_script(text: str) -> str:
     return text
 
 
+def normalize_hindi_script(text: str) -> str:
+    """
+    Normalize Hindi (Devanagari) unicode text.
+    Same operations as Gujarati: NFC + zero-width strip + whitespace.
+    Kept as a separate function for clarity / future Hindi-specific tweaks.
+    """
+    text = unicodedata.normalize("NFC", text)
+    for zw in ["\u200b", "\ufeff"]:
+        text = text.replace(zw, "")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main public function
 # ─────────────────────────────────────────────────────────────────────────────
@@ -200,6 +229,8 @@ async def process_input(text: str) -> Tuple[str, str]:
 
     if lang_type == "gujarati_script":
         processed = normalize_gujarati_script(text)
+    elif lang_type == "hindi_script":
+        processed = normalize_hindi_script(text)
     else:
         # romanized_gujarati and english both pass through unchanged
         # query generator LLM handles both: it searches EN+GU and
