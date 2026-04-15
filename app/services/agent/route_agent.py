@@ -52,6 +52,10 @@ SQL
   - Which yards are in a specific taluka or district (live DB lookup)
   - What yard is in my taluka / nearby yard search (live DB lookup)
   - Order history or status
+  - Listing / enumerating items the app currently tracks: list of crops,
+    list of yards, list of cities, list of K-Shop products, list of news
+    (any "show / list / enumerate / give me all" intent that wants the
+    actual live set, not a static description)
 
 NAVIGATION
   User wants HOW TO USE the app — step-by-step instructions:
@@ -96,7 +100,6 @@ GENERAL
   - What products are sold in a yard? (crop types overview) (gq_025)
   - What weight units are used in the app? (Mann, Kilogram, Ton) (gq_026)
   - What products are there in Krushi Ratn? (overview of all sections) (gq_027)
-  - What crops are available in Krushi Ratn? (overview list) (gq_028)
   - What cities are there in Krushi Ratn? (coverage overview) (gq_029)
   - What can I do on Krushi Ratn? (capabilities overview) (gq_030)
   - What services does the app provide to farmers? (gq_031)
@@ -116,22 +119,26 @@ CRITICAL DISAMBIGUATION — these pairs are easy to confuse:
   "What is a yard?" (concept) → GENERAL
   "Which yards are in Rajkot taluka?" (specific lookup) → SQL
 
-  "What crops are available in Krushi Ratn?" (overview list) → GENERAL
-  "Show crops in Krushi Ratn" (overview list — same as above!) → GENERAL
-  "List all crops" (overview list) → GENERAL
-  "What all crops are there?" (overview list) → GENERAL
+  "What crops are available in Krushi Ratn?" (live list from DB) → SQL
+  "Show crops in Krushi Ratn" (live list from DB) → SQL
+  "List all crops" (live list from DB) → SQL
+  "What all crops are there?" (live list from DB) → SQL
+  "Show list of crops present in krushiratn" (live list from DB) → SQL
   "Kapas bhav surat" (live price for a SPECIFIC crop) → SQL
 
-  "What products are in K-Shop?" (overview) → GENERAL
+  "What products are in K-Shop?" (live product list) → SQL
   "Show K-Shop products avaliable in Krushiratna" (browsing product list) → SQL
   "Balwan Power Weeder price" (specific product price) → SQL
 
   "How does the AI chatbot work?" (overview) → GENERAL
   "Show me kapas bhav" (live data for specific crop) → SQL
 
-  KEY RULE: "show/list CROPS" = GENERAL (overview), "show PRODUCTS/NEWS" = SQL (live data fetch).
-  The word "crops" without a specific crop name means the user wants a list of what's available,
-  not a database query. Specific crop names (kapas, wheat, bajra, ghau) with price words = SQL.
+  KEY RULE: Any "show / list / enumerate / what all / give me all" question
+  that asks for the SET OF ITEMS the app tracks (crops, yards, cities,
+  products, news) is SQL — fetch from DB. GENERAL is only for static
+  conceptual questions ("what IS a yard", "is the app free", "how does
+  the chatbot work"). When in doubt between "list of X" and "concept of X",
+  prefer SQL.
 
   "What should I do if I face app issues?" (guidance) → GENERAL
   "How do I contact support?" (step-by-step) → NAVIGATION
@@ -178,12 +185,13 @@ Examples:
   "app ni suvidha batao" → GENERAL
   "krushi ratn ma shu kari shakay" → GENERAL
   "yard shu hoy" → GENERAL
-  "kayi crops uplabdh che" → GENERAL
-  "show crops in krushiratna" → GENERAL
-  "show kshop products in krushiratna" → GENERAL
-  "list all crops" → GENERAL
-  "show me all crops" → GENERAL
-  "crops in krushi ratn" → GENERAL
+  "kayi crops uplabdh che" → SQL
+  "show crops in krushiratna" → SQL
+  "show kshop products in krushiratna" → SQL
+  "list all crops" → SQL
+  "show me all crops" → SQL
+  "show list of crops present in krushiratn" → SQL
+  "crops in krushi ratn" → SQL
   "app ma weight unit shu che" → GENERAL
   "buyer aavya par shu karvu" → GENERAL
   "kharidi karta pahela shu jovu" → GENERAL

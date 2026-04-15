@@ -229,17 +229,24 @@ class Orchestrator:
             elif flow == "GENERAL":
                 result = await self._flow_general(user_query)
 
-            elif not _sql_enabled:
-                # SQL flow disabled — redirect to app
-                logger.info(f"SQL FLOW DISABLED — route agent said SQL, returning redirect")
-                result = self._sql_disabled_response()
-                result["flow"] = "SQL_DISABLED"
-                total_ms = (time.perf_counter() - pipeline_start) * 1000
-                logger.pipeline_end("SQL_DISABLED", total_ms)
-                return result
-
-            else:  # SQL (enabled)
-                result = await self._flow_sql(user_query, confirmed_intent=confirmed_intent, keyword_hint=keyword_hint)
+            elif flow == "SQL":
+                # SQL flow routing — respects ENABLE_SQL_FLOW setting
+                if not _sql_enabled:
+                    # SQL flow disabled — redirect to app
+                    logger.info(f"SQL FLOW DISABLED — route agent said SQL, returning redirect")
+                    result = self._sql_disabled_response()
+                    result["flow"] = "SQL_DISABLED"
+                    total_ms = (time.perf_counter() - pipeline_start) * 1000
+                    logger.pipeline_end("SQL_DISABLED", total_ms)
+                    return result
+                else:
+                    # SQL flow enabled — execute database query
+                    result = await self._flow_sql(user_query, confirmed_intent=confirmed_intent, keyword_hint=keyword_hint)
+            
+            else:
+                # Unknown flow type — should not reach here
+                logger.warning(f"Unknown flow type: {flow}")
+                result = self._out_of_scope_response()
 
             result["flow"] = flow
             total_ms = (time.perf_counter() - pipeline_start) * 1000
@@ -640,6 +647,39 @@ TABLES:
 {compact_schema}{intent_note_block}{keyword_hint_block}
 
 RULES:
+0. ENUMERATION QUERIES — CHECK FIRST: If the user is asking for the LIST / SET of
+   items the app tracks in a category (NOT a specific item by name), use SELECT DISTINCT
+   on the descriptive name column with NO keyword LIKE filter on the category word.
+   Trigger phrases: "list all X", "show all X", "show list of X", "what X are available",
+   "what all X are there", "give me all X", "enumerate X", "kayi X uplabdh che",
+   "X ni list batao", "બધા X બતાવો", "બતાવો બધા X".
+   The category word itself (crops, yards, cities, products, news) is the CATEGORY, NOT
+   a value to LIKE-search. Do NOT write LIKE '%crop%' or LIKE '%yard%'.
+   Pattern:
+     SELECT DISTINCT <name_col> AS <alias>
+     FROM <primary_table> [JOINs as needed for descriptive name]
+     WHERE <primary_table>.deleted_at IS NULL
+     ORDER BY <name_col> ASC
+     LIMIT 100;
+   Examples:
+     "list all crops" / "show crops in krushiratn" / "what crops are available" →
+       SELECT DISTINCT sc.name AS crop
+       FROM products p
+       JOIN sub_categories sc ON p.subcategory_id = sc.id
+       WHERE p.deleted_at IS NULL
+       ORDER BY sc.name ASC LIMIT 100;
+     "show all yards" / "list yards" →
+       SELECT DISTINCT y.name AS yard
+       FROM yards y
+       WHERE y.deleted_at IS NULL
+       ORDER BY y.name ASC LIMIT 100;
+     "what cities does the app cover" / "list all cities" →
+       SELECT DISTINCT c.name AS city
+       FROM cities c
+       WHERE c.deleted_at IS NULL
+       ORDER BY c.name ASC LIMIT 100;
+   This rule OVERRIDES rules 2 and 3 for enumeration queries — those rules apply only
+   when the user names a SPECIFIC item (e.g. "kapas bhav", "balwan weeder price").
 1. Strip intent words before extracting product keywords:
    intent words = mare, maro, karvu, karu, che, purchase, from, kshop, levu, joiye, apo, batao, please
 2. Search each keyword INDEPENDENTLY with OR — never use full phrase LIKE
