@@ -28,7 +28,9 @@ from app.services.agent.answer_generator import get_answer_generator
 from app.services.agent.knowledge_handler import get_knowledge_handler
 from app.services.agent.status_filter     import filter_query_results
 from app.services.database.query_executor import get_query_executor
+from app.services.database.query_validator import query_validator
 from app.utils.schema_generator        import SchemaGenerator
+from app.utils.privacy_policy          import get_privacy_policy
 from app.services.llm.manager          import get_llm_manager
 from app.models.chat_models            import LLMMessage
 from app.core.logger                   import get_agent_logger, Timer
@@ -55,6 +57,7 @@ class Orchestrator:
         self.knowledge_handler = get_knowledge_handler()
         self.query_executor    = get_query_executor()
         self.llm_manager       = get_llm_manager()
+        self.privacy_policy    = get_privacy_policy()
 
         # Schema data
         self.condensed_schema: dict = {}
@@ -342,6 +345,7 @@ class Orchestrator:
             from app.services.agent.confirmation_layer import get_confirmation_layer
             _cl = get_confirmation_layer()
             f1_injected_tools = _cl.get_confirmed_tables(confirmed_intent)
+            f1_injected_tools = self.privacy_policy.filter_tool_names(f1_injected_tools)
             intent_note       = _cl.get_intent_note(confirmed_intent)
             if f1_injected_tools:
                 logger.info(
@@ -359,6 +363,17 @@ class Orchestrator:
         cached = self.query_cache.get(query)
         if cached:
             queries, selected_tools = cached
+            selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
+            all_valid, validation_errors = query_validator.validate_batch([q.get("sql", "") for q in queries])
+            if not selected_tools or not all_valid:
+                logger.warning(
+                    f"Privacy policy rejected cached SQL; invalidating cache | "
+                    f"errors={validation_errors}"
+                )
+                self.query_cache.invalidate(query)
+                cached = None
+
+        if cached:
             logger.cache_hit(query, selected_tools)
             stats = self.query_cache.stats
             logger.info(f"📊 Cache: {stats['hit_rate_percent']}% hit rate | "
@@ -394,6 +409,7 @@ class Orchestrator:
                 routed = self.intent_router.route(query)
             if routed:
                 selected_tools, rule_name = routed
+                selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
                 logger.intent_routed(rule_name, selected_tools)
                 logger.step_done("STEP 3 / INTENT ROUTER", t.elapsed_ms,
                                  rule=rule_name, tables=str(selected_tools))
@@ -408,6 +424,7 @@ class Orchestrator:
             available = self.schema_generator.get_available_tool_names()
             if not available and self._virtual_tools:
                 available = [f"query_{t}" for t in sorted(self._virtual_tools.keys())]
+            available = self.privacy_policy.filter_tool_names(available)
 
             with Timer() as t:
                 tool_resp = await self.tool_selector.select_tools(
@@ -416,6 +433,7 @@ class Orchestrator:
                     available_tools=available,
                 )
             selected_tools = tool_resp.selected_tools
+            selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
             logger.step_done("STEP 4 / TOOL SELECTION", t.elapsed_ms,
                              tools=str(selected_tools))
             logger.tool_selection(selected_tools, query)
@@ -424,6 +442,7 @@ class Orchestrator:
                 logger.warning("Tool selection returned nothing — relaxed retry")
                 with Timer() as t2:
                     selected_tools = await self._select_tools_relaxed(query, available)
+                    selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
                 logger.step_done("STEP 4 / TOOL SELECTION RELAXED", t2.elapsed_ms,
                                  tools=str(selected_tools))
                 if not selected_tools:
@@ -519,6 +538,7 @@ class Orchestrator:
           LLM only sees filtered rows. Frontend receives both.
         """
         # ── Status filter (post-SQL, pre-LLM) ───────────────────────────────
+        query_results = self.privacy_policy.sanitize_query_results(query_results)
         logger.step("STEP 7a / STATUS FILTER", f"{len(query_results)} result sets")
         filtered_results, any_filtered = filter_query_results(query_results)
         if any_filtered:
@@ -559,7 +579,8 @@ class Orchestrator:
 
     async def _generate_sql_compact(self, query: str, selected_tools: List[str], keyword_hint: str = "", intent_note: str = "") -> List[Dict]:
         """Generate SQL using pre-compiled compact schemas. ~60% fewer tokens than full schema."""
-        available = set(self.schema_generator.get_available_tool_names())
+        available = set(self.privacy_policy.filter_tool_names(self.schema_generator.get_available_tool_names()))
+        selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
         schema_lines = []
         for tool_name in selected_tools:
             if tool_name not in available:
@@ -793,9 +814,17 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
         if primary_table == "kshop_products":
             clauses.append(f"{primary_table}.status = 1")
 
+        cols = []
+        m = re.search(r"COLUMNS:\s*(.*)", compiled_schema or "")
+        if m:
+            for part in m.group(1).split("|"):
+                col = part.strip().split(":", 1)[0].strip()
+                if col:
+                    cols.append(f"{primary_table}.{col}")
+        select_cols = ", ".join(cols[:8]) if cols else f"{primary_table}.id"
         where = " AND ".join(clauses) if clauses else "1=1"
         sql   = (
-            f"SELECT * FROM {primary_table} "
+            f"SELECT {select_cols} FROM {primary_table} "
             f"WHERE {where} "
             f"ORDER BY {primary_table}.created_at DESC LIMIT 10"
         )
