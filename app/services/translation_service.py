@@ -19,6 +19,7 @@ Priority:
 Supported lang_type → Google language code:
   "gujarati_script"    → "gu"
   "romanized_gujarati" → "gu"  (respond in proper Gujarati script)
+  "hindi_script"       → "hi"  (respond in Hindi)
   "english"            → None  (no translation needed)
 """
 
@@ -33,6 +34,7 @@ logger = get_logger("translation_service")
 _LANG_TYPE_TO_GOOGLE: dict = {
     "gujarati_script":    "gu",
     "romanized_gujarati": "gu",
+    "hindi_script":       "hi",
     "english":            None,
 }
 
