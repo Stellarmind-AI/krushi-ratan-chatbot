@@ -47,6 +47,83 @@ _GOOGLE_TRANSLATE_URL = "https://translation.googleapis.com/language/translate/v
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Gujarati-script term protection
+#
+# Problem: mixed-script strings like "What would you like to know about 'ઘઉં'?"
+# sent to Google Translate (EN→GU) cause the translation engine to re-process
+# the embedded Gujarati word, sometimes corrupting it (ઘઉં → ધું).
+#
+# Solution: replace every Gujarati-script token with a safe ASCII placeholder
+# BEFORE translation, then restore it AFTER.
+# Google/LLM will translate the English parts and leave placeholders untouched.
+# ─────────────────────────────────────────────────────────────────────────────
+import re as _re
+
+# Matches one or more consecutive Gujarati-script characters (U+0A80–U+0AFF)
+# including combining characters (matras, anusvara, visarga, etc.)
+_GUJARATI_TOKEN_RE = _re.compile(r"[઀-૿]+")
+
+
+def _protect_gujarati_terms(text: str) -> tuple:
+    """
+    Replace every Gujarati-script token in text with a placeholder.
+
+    Returns:
+        (protected_text, mapping)
+        protected_text — text with Gujarati tokens replaced by __GW0__, __GW1__, ...
+        mapping        — dict {placeholder: original_token} for restoration
+
+    Example:
+        "What would you like to know about 'ઘઉં'?"
+        → ("What would you like to know about '__GW0__'?",
+           {"__GW0__": "ઘઉં"})
+    """
+    mapping: dict = {}
+    counter = [0]
+
+    def replacer(m):
+        token = m.group(0)
+        # Reuse same placeholder for identical tokens
+        for ph, orig in mapping.items():
+            if orig == token:
+                return ph
+        ph = f"__GW{counter[0]}__"
+        counter[0] += 1
+        mapping[ph] = token
+        return ph
+
+    protected = _GUJARATI_TOKEN_RE.sub(replacer, text)
+    return protected, mapping
+
+
+def _restore_gujarati_terms(text: str, mapping: dict) -> str:
+    """
+    Restore original Gujarati tokens from placeholders.
+    Handles cases where Google/LLM adds or removes spaces around placeholders.
+    """
+    for placeholder, original in mapping.items():
+        # Direct replacement
+        text = text.replace(placeholder, original)
+        # Also handle if placeholder was lowercased by translator
+        text = text.replace(placeholder.lower(), original)
+    return text
+
+
+def _protect_list(items: list) -> tuple:
+    """
+    Protect Gujarati terms across a list of strings using a shared mapping.
+    Returns (protected_items, shared_mapping).
+    """
+    shared_mapping: dict = {}
+    protected_items = []
+    for item in items:
+        protected, mapping = _protect_gujarati_terms(item)
+        shared_mapping.update(mapping)
+        protected_items.append(protected)
+    return protected_items, shared_mapping
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # LLM fallback translation
 # Used when GOOGLE_TRANSLATE_API_KEY is not configured.
 # Reuses the same Groq instance already running — zero extra cost.
@@ -252,14 +329,20 @@ async def translate_to_user_language(text: str, lang_type: str) -> str:
 
     api_key = getattr(settings, "GOOGLE_TRANSLATE_API_KEY", None)
 
+    # Protect embedded Gujarati-script tokens before translation.
+    # Placeholders (__GW0__ etc.) are ASCII — translators leave them untouched.
+    # This prevents Google/LLM from corrupting e.g. ઘઉં → ધું.
+    protected_text, term_map = _protect_gujarati_terms(text)
+
     # Try Google first (fast, accurate)
     if api_key:
-        result = await _translate_with_google(text, target_lang, api_key)
+        result = await _translate_with_google(protected_text, target_lang, api_key)
         if result:
-            return result
+            return _restore_gujarati_terms(result, term_map)
 
     # LLM fallback (no extra API key required)
-    return await _translate_with_llm(text, target_lang)
+    result = await _translate_with_llm(protected_text, target_lang)
+    return _restore_gujarati_terms(result, term_map)
 
 
 async def translate_list_to_user_language(items: List[str], lang_type: str) -> List[str]:
@@ -286,11 +369,16 @@ async def translate_list_to_user_language(items: List[str], lang_type: str) -> L
 
     api_key = getattr(settings, "GOOGLE_TRANSLATE_API_KEY", None)
 
+    # Protect embedded Gujarati-script tokens across all items.
+    # Shared mapping so identical tokens get the same placeholder.
+    protected_items, term_map = _protect_list(items)
+
     # Try Google first
     if api_key:
-        result = await _translate_list_with_google(items, target_lang, api_key)
+        result = await _translate_list_with_google(protected_items, target_lang, api_key)
         if result:
-            return result
+            return [_restore_gujarati_terms(r, term_map) for r in result]
 
     # LLM fallback
-    return await _translate_list_with_llm(items, target_lang)
+    result = await _translate_list_with_llm(protected_items, target_lang)
+    return [_restore_gujarati_terms(r, term_map) for r in result]

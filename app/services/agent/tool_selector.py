@@ -53,16 +53,6 @@ INTENT_WORDS = {
     "i", "want", "show", "me", "tell", "get", "find", "give",
 }
 
-# Source-specific keywords — when user mentions these, go directly to that source
-SOURCE_KEYWORDS = {
-    "kshop":     ["kshop", "k-shop", "k shop"],
-    "buy_sell":  ["buy sell", "buysell", "buy/sell", "marketplace"],
-    "video":     ["video", "watch", "creator"],
-    "news":      ["news", "samachar", "update"],
-    "price":     ["price", "bhav", "ભાવ", "rate", "mandi", "yard", "yard price"],
-    "order":     ["order", "orders", "purchase history", "my order"],
-    "user":      ["user", "farmer", "profile", "account"],
-}
 
 
 class ToolSelector:
@@ -161,7 +151,7 @@ SELECTION RULES
 5. Source-specific rules:
    - User says "kshop" → query_kshop_products + its dependencies
    - User says "buy sell" → query_buy_sell_products + its dependencies
-   - User asks about price/bhav/mandi/cost/₹/rupees → query_products + query_sub_categories + query_yards + query_cities (NEVER query_news)
+   - User asks about price/bhav/mandi/cost/₹/rupees → query_products + query_sub_categories + query_yards + query_cities + query_talukas (NEVER query_news)
    - General product/equipment query (no source) → BOTH query_kshop_products AND query_buy_sell_products + their deps
    - Video query → query_video_posts + its dependencies
    - News query → query_news + its dependencies ONLY when user asks "what's the news", "latest news", "samachar", "khabar" — NEVER for price/availability questions

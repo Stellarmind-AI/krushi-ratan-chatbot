@@ -145,11 +145,11 @@ class ConfirmedIntent:
 # ─────────────────────────────────────────────────────────────────────────────
 
 INTENT_TO_TABLES: Dict[str, List[str]] = {
-    "crop_price":       ["query_products", "query_sub_categories", "query_yards", "query_cities", "query_weights"],
+    "crop_price":       ["query_products", "query_sub_categories", "query_yards", "query_cities", "query_talukas", "query_weights"],
     "kshop_product":    ["query_kshop_products", "query_kshop_companies", "query_kshop_categories", "query_kshop_weights"],
     "buy_sell_product": ["query_buy_sell_products", "query_buy_sell_categories", "query_users"],
     "seed_info":        ["query_seeds", "query_sub_categories"],
-    "local_news":       ["query_news", "query_cities", "query_states"],
+    "local_news":       ["query_news", "query_cities", "query_talukas", "query_states"],
     "video_search":     ["query_video_posts", "query_users", "query_video_categories"],
     "equipment_kshop":  ["query_kshop_products", "query_kshop_companies", "query_kshop_categories", "query_kshop_weights"],
     "equipment_used":   ["query_buy_sell_products", "query_buy_sell_categories", "query_users"],
@@ -557,12 +557,11 @@ class ConfirmationLayer:
         # Scenario 1: Crop name
         for kw in _CROP_KEYWORDS:
             if kw in q:
-                logger.info(f"🔔 F1 triggered | scenario=crop_name keyword='{kw}'")
-                return ClarificationRequest(
-                    question=f"What would you like to know about '{kw.capitalize()}'?",
-                    options=_build_crop_options(kw, q),
-                    scenario="crop_name",
-                    matched_keyword=kw,
+                logger.info(f"✅ F1 CROP BYPASS | keyword='{kw}' → crop_price direct (no clarification)")
+                return ConfirmedIntent(
+                    intent_key="crop_price",
+                    confidence=0.85,
+                    domain="crop_price",
                 )
 
         # Scenario 2: Generic product
