@@ -21,8 +21,7 @@ import time
 from typing import List, Dict, Any, Optional
 
 from app.services.agent.route_agent    import get_route_agent, FlowType
-from app.services.agent.query_cache    import get_query_cache, STRIP_WORDS
-from app.services.knowledge_cache      import BROWSE_KEYWORDS
+from app.services.agent.query_cache    import get_query_cache, strip_fillers, is_filler_token
 from app.services.agent.intent_router  import get_intent_router
 from app.services.agent.tool_selector  import get_tool_selector, build_fk_deps_from_tools
 from app.services.agent.answer_generator import get_answer_generator
@@ -833,41 +832,42 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
 
     @staticmethod
     def _is_exploratory_query(query: str, selected_tools: list) -> bool:
-        # Return True when the query has no specific item/product keyword to
-        # search for — i.e. the user is asking "what is X?" rather than
-        # "find product Y in X".
-        #
-        # Algorithm:
-        #   1. Lowercase + strip punctuation
-        #   2. Build domain_words from selected_tools table name components
-        #      WITH singular/plural variants (products→product, category→categories)
-        #   3. Combine STRIP_WORDS + domain_words + BROWSE_KEYWORDS into exclusion set
-        #      BROWSE_KEYWORDS covers category synonyms the domain_words miss:
-        #      "crop" (synonym of products table), "mandi" (synonym of yards), etc.
-        #   4. If no word survives exclusion (length > 1) -> exploratory
-        import re as _re
-        q_clean = _re.sub(r"[^\w\s]", " ", query.lower())
-        words   = q_clean.split()
+        """
+        True when the query has no specific search keyword — user is asking
+        "what is X?" / "how do I do Y?" rather than naming a real item.
 
-        # Extract component words from every selected table name
-        # + singular/plural variants for robust matching
+        Delegates filler detection to `strip_fillers` (regex + fuzzy pipeline),
+        then additionally strips domain words derived from the selected table
+        names (which are context-specific and not global fillers).
+
+        Examples (expected outcomes):
+          "how i sell any product"   → []                   → exploratory
+          "what is kshop"            → []                   → exploratory
+          "list all yards"           → []                   → exploratory (CATEGORY root)
+          "show me prodct"           → []                   → exploratory (typo handled)
+          "kapas bhav"               → ["kapas"]            → specific search
+          "balwan weeder price"      → ["balwan", "weeder"] → specific search
+        """
+        survivors = strip_fillers(query)
+        if not survivors:
+            return True
+
+        # Strip domain words derived from the selected table names — these
+        # are context-specific ("buy_sell_products" → "buy", "sell", "products")
+        # and shouldn't be promoted to search targets.  Each component runs
+        # through is_filler_token so inflections and typos are handled the
+        # same way as global fillers.
         domain_words: set = set()
         for tool in (selected_tools or []):
             table = tool.replace("query_", "").replace("_", " ")
             for w in table.split():
                 if len(w) > 1:
                     domain_words.add(w)
-                    # Plural → singular: "products" → "product", "categories" → "category"
-                    if w.endswith("ies") and len(w) > 4:
-                        domain_words.add(w[:-3] + "y")
-                    elif w.endswith("s") and len(w) > 3:
-                        domain_words.add(w[:-1])
-                    # Singular → plural: "product" → "products"
-                    if not w.endswith("s"):
-                        domain_words.add(w + "s")
 
-        exclusion = STRIP_WORDS | domain_words | BROWSE_KEYWORDS
-        meaningful = [w for w in words if w not in exclusion and len(w) > 1]
+        meaningful = [
+            w for w in survivors
+            if w not in domain_words and not is_filler_token(w)
+        ]
         return len(meaningful) == 0
 
     @staticmethod
