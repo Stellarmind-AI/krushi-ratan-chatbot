@@ -695,7 +695,22 @@ TABLES:
 {compact_schema}{intent_note_block}{keyword_hint_block}
 
 RULES:
-0. ENUMERATION QUERIES — CHECK FIRST: If the user is asking for the LIST / SET of
+0. SQL FORMATTING — CRITICAL (BOTH RULES MANDATORY):
+   a) BACKSLASH PROHIBITION — Write SQL on standard lines ONLY:
+      • NEVER use backslash (\\) for line continuation — this breaks MySQL execution
+      • INCORRECT: SELECT col \\\n FROM table (backslash at end of line)
+      • CORRECT:   SELECT col\n FROM table (use real newlines only)
+      • If SQL is long, use actual newlines (\n in your response) NOT backslash continuation
+      • Even if your training suggests backslash for line breaks, MySQL does NOT support it
+   b) TABLE QUALIFICATION — ALWAYS prefix SELECT columns with table name or alias:
+      • When query has JOINs, EVERY column in SELECT must include its table name or alias
+      • INCORRECT: SELECT id, title, description FROM news JOIN states ... (bare column names)
+      • CORRECT:   SELECT news.id, news.title, news.description FROM news JOIN states ... (qualified)
+      • Use table aliases for brevity: SELECT n.id, n.title, s.name FROM news n JOIN states s ...
+      • This prevents MySQL ambiguity errors when the same column exists in multiple tables
+      • Exception: aggregate functions like COUNT(*), SUM(col) can stay unqualified if column is unique
+      
+1. ENUMERATION QUERIES — CHECK FIRST: If the user is asking for the LIST / SET of
    items the app tracks in a category (NOT a specific item by name), use SELECT DISTINCT
    on the descriptive name column with NO keyword LIKE filter on the category word.
    Trigger phrases: "list all X", "show all X", "show list of X", "what X are available",
@@ -726,12 +741,12 @@ RULES:
        FROM cities c
        WHERE c.deleted_at IS NULL
        ORDER BY c.name ASC LIMIT 100;
-   This rule OVERRIDES rules 2 and 3 for enumeration queries — those rules apply only
+   This rule OVERRIDES rules 3 and 4 for enumeration queries — those rules apply only
    when the user names a SPECIFIC item (e.g. "kapas bhav", "balwan weeder price").
-1. Strip intent words before extracting product keywords:
+2. Strip intent words before extracting product keywords:
    intent words = mare, maro, karvu, karu, che, purchase, from, kshop, levu, joiye, apo, batao, please
-2. Search each keyword INDEPENDENTLY with OR — never use full phrase LIKE
-3. PRODUCT / CROP KEYWORDS — CRITICAL:
+3. Search each keyword INDEPENDENTLY with OR — never use full phrase LIKE
+4. PRODUCT / CROP KEYWORDS — CRITICAL:
    a) If a "KEYWORD SEARCH VARIANTS" section is present above, use ONLY the
       variants listed there.  Do NOT add your own Gujarati/Hindi translations.
       Example: if the section shows "'onion' → ['onion', 'dungli', 'kanda', 'ડુંગળી']",
@@ -740,7 +755,7 @@ RULES:
    b) If NO variants section is present for a keyword, search in exactly the
       script(s) the user typed — do not translate.
    c) Search each keyword INDEPENDENTLY with OR across the full variant list.
-4. JOINS — MANDATORY: for every primary table that has entries under its JOINS block,
+5. JOINS — MANDATORY: for every primary table that has entries under its JOINS block,
    (a) copy those JOIN clauses verbatim into your FROM clause (JOIN vs LEFT JOIN exactly as shown),
    (b) in the SELECT list, return the joined tables' descriptive columns
        (e.g. yards.name, sub_categories.name, cities.name, kshop_companies.name)
@@ -748,11 +763,11 @@ RULES:
    Never return a *_id column to the user when the referenced table is listed as a JOIN target.
    Short aliases are fine (p, y, sc, c, kp, kco, kc, kw, bp, u, n, vp), but every JOIN from
    the JOINS block MUST appear whenever the referenced table has a name/title/display_name column.
-5. Always add: WHERE <table>.deleted_at IS NULL  (for tables that have deleted_at)
-6. For kshop_products: always add AND status = 1
-7. NEVER generate SELECT * without WHERE clause
-8. NEVER generate a query with no WHERE clause
-9. LOCATION NAMES — CRITICAL:
+6. Always add: WHERE <table>.deleted_at IS NULL  (for tables that have deleted_at)
+7. For kshop_products: always add AND status = 1
+8. NEVER generate SELECT * without WHERE clause
+9. NEVER generate a query with no WHERE clause
+10. LOCATION NAMES — CRITICAL:
    a) Never use exact match (=) for location names. Always use LIKE with both English and Gujarati script.
    b) A location name can be a YARD name, a TALUKA name, or a CITY name — you cannot know which in advance.
       Yard names are typically named after the taluka or city they are in (e.g. yard "ગોંડલ" is in taluka "ગોંડલ").
@@ -804,9 +819,9 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
         return self._parse_sql_response(response.content)
 
     def _parse_sql_response(self, content: str) -> List[Dict]:
-        """Parse LLM SQL response. Validates: must have WHERE, not bare SELECT *."""
+        """Parse LLM SQL response. Sanitizes, validates: must have WHERE, not bare SELECT *."""
         import re as _re
-        from app.utils.json_parser import json_parser
+        from app.utils.json_parser import json_parser, sql_sanitizer
         try:
             queries = json_parser.extract_queries_from_text(content)
             if not queries:
@@ -815,7 +830,12 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
             for q in (queries or []):
                 if not isinstance(q, dict) or "sql" not in q:
                     continue
-                sql = q["sql"].strip()
+                
+                # ── SANITIZE: Remove LLM-generated noise (backslashes, missing prefixes) ─
+                sql = sql_sanitizer.sanitize_sql(q["sql"].strip())
+                q["sql"] = sql
+                
+                # Validation checks
                 if "WHERE" not in sql.upper():
                     logger.warning(f"Rejecting query with no WHERE: {sql[:100]}")
                     continue
@@ -826,7 +846,7 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
                     m = _re.search(r"FROM\s+([a-zA-Z0-9_]+)", sql, _re.IGNORECASE)
                     q["table_name"] = m.group(1) if m else "unknown"
                 valid.append(q)
-                logger.debug(f"Valid SQL: {sql[:120]}")
+                logger.debug(f"Valid SQL (sanitized): {sql[:120]}")
             return valid
         except Exception as e:
             logger.error_with_context(e, {"action": "_parse_sql_response", "content": content[:200]})
