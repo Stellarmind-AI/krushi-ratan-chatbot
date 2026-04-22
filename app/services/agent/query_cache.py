@@ -66,23 +66,38 @@ _CACHE_FILE = _CACHE_DIR / "query_cache.json"
 
 # Semantic root groups — English/romanized tokens only.
 # Gujarati-script fillers use a separate set (Gujarati morphology differs).
-_ROOTS_BY_GROUP: Dict[str, set] = {
-    "QUESTION": {
+#
+# Each group declares:
+#   inflect: True  → suffix pattern is applied (verbs, common nouns)
+#   inflect: False → exact match only (grammatical primitives, Indic tokens)
+#
+# Why inflect is a per-group choice:
+#   Applying English suffixes to grammatical primitives (prepositions, articles,
+#   pronouns, conjunctions) creates catastrophic false-positives against real
+#   content words.  Example: if "on" (PREP) + "ion" (suffix) both match, the
+#   pattern \bon(?:ion)?\b also matches "ONION" — a real crop.  Similarly:
+#     - "an" + "ion" → "anion"
+#     - "to" + "es"  → "toes"
+#     - "on" + "ly"  → "only" (benign here, but illustrates the class)
+#   Grammatical primitives are atomic — they don't inflect — so their regex
+#   must be exact match.  Suffix inflection is restricted to VERBS and NOUNS.
+_ROOTS_BY_GROUP: Dict[str, Dict[str, object]] = {
+    "QUESTION": {"inflect": False, "roots": {
         "how", "what", "where", "when", "why", "which", "who", "whose", "whom",
-    },
-    "INTENT_VERB": {
+    }},
+    "INTENT_VERB": {"inflect": True, "roots": {
         "sell", "buy", "purchase", "get", "find", "show", "tell", "give",
         "want", "need", "like", "help", "fetch", "display", "list", "explain",
         "describe", "know", "mean", "understand", "say", "ask", "look",
-    },
-    "DETERMINER": {
+    }},
+    "DETERMINER": {"inflect": False, "roots": {
         # Quantifiers/determiners — never search keywords on their own.
         "any", "some", "all", "every", "each", "no", "none", "another", "other",
         "few", "many", "much", "several", "both", "either", "neither",
         "this", "that", "these", "those",
-    },
-    "ARTICLE": {"a", "an", "the"},
-    "PRONOUN": {
+    }},
+    "ARTICLE": {"inflect": False, "roots": {"a", "an", "the"}},
+    "PRONOUN": {"inflect": False, "roots": {
         "i", "me", "my", "mine", "myself",
         "you", "your", "yours", "yourself",
         "he", "him", "his", "himself",
@@ -90,36 +105,35 @@ _ROOTS_BY_GROUP: Dict[str, set] = {
         "it", "its", "itself",
         "we", "us", "our", "ours", "ourselves",
         "they", "them", "their", "theirs", "themselves",
-    },
-    "AUX": {
+    }},
+    "AUX": {"inflect": False, "roots": {
         "is", "are", "was", "were", "be", "been", "being", "am",
         "have", "has", "had", "having",
         "do", "does", "did", "doing", "done",
         "can", "could", "will", "would", "shall", "should", "may", "might", "must",
-    },
-    "PREP": {
+    }},
+    "PREP": {"inflect": False, "roots": {
         "in", "on", "at", "of", "for", "to", "from", "with", "by",
         "about", "into", "onto", "upon", "under", "over", "between",
         "through", "during", "before", "after", "above", "below",
-    },
-    "CONJ": {
+    }},
+    "CONJ": {"inflect": False, "roots": {
         "and", "or", "but", "so", "if", "then", "than", "as",
         "because", "while", "although", "though",
-    },
-    "POLITE": {"please", "pls", "kindly", "thanks", "thank"},
+    }},
+    "POLITE": {"inflect": False, "roots": {"please", "pls", "kindly", "thanks", "thank"}},
     # Category/browse nouns — app domain words that are NEVER specific items.
     # (Absorbs what used to live in knowledge_cache.BROWSE_KEYWORDS.)
-    "CATEGORY": {
+    "CATEGORY": {"inflect": True, "roots": {
         "product", "item", "crop", "seed", "video", "news",
         "price", "bhav", "rate", "category", "yard", "mandi",
         "order", "listing", "post", "thing", "stuff",
         "samachar", "khabar", "kshop",
-    },
+    }},
     # Romanized Gujarati / Hindi intent/filler.
-    # Kept as explicit variants because Indic morphology doesn't follow the
-    # English inflection regex (e.g. maro/mari/mara are gender-inflections
-    # of the same root, not suffix inflections).
-    "INDIC_ROMAN": {
+    # Indic morphology doesn't follow English suffix rules (maro/mari/mara are
+    # gender-inflections, not suffix-inflections), so exact match only.
+    "INDIC_ROMAN": {"inflect": False, "roots": {
         "mare", "maro", "mari", "mara", "mane",
         "karvu", "karvani", "karvo", "karu", "karshu", "karva",
         "che", "chhe", "hatu", "hati", "hashe",
@@ -132,30 +146,40 @@ _ROOTS_BY_GROUP: Dict[str, set] = {
         "mujhe", "mera", "mere", "meri", "hain", "hai",
         "karo", "karna", "chahiye", "dijiye",
         "ka", "ki", "ke", "ko", "se", "mein",
-    },
+    }},
 }
 
-# Flat union of all roots — used to build the regex AND the fuzzy match pool.
-_ALL_ROOTS: Set[str] = set().union(*_ROOTS_BY_GROUP.values())
+# Derive root collections from the group declarations
+_INFLECTABLE_ROOTS: Set[str] = set()
+_FIXED_ROOTS:       Set[str] = set()
+for _spec in _ROOTS_BY_GROUP.values():
+    _bucket = _INFLECTABLE_ROOTS if _spec["inflect"] else _FIXED_ROOTS
+    _bucket |= _spec["roots"]  # type: ignore[operator]
 
-# Inflection-suffix pattern — captures common English inflections so we don't
-# have to list plurals, verb tenses, comparatives, etc. manually.
-#
-# Matches (examples):
-#   product  → product, products
-#   sell     → sell, sells, selling, seller, sellers, selled(no), sold(no — irregular)
-#   describe → describe, describes, described, describing, describer
-#
+# Flat union — used for fuzzy-match pool and STRIP_WORDS materialization.
+_ALL_ROOTS: Set[str] = _INFLECTABLE_ROOTS | _FIXED_ROOTS
+
+# Inflection-suffix pattern — ONLY applied to inflectable roots (verbs, nouns).
 # Irregular verbs (go/went, sell/sold) aren't covered by suffix patterns;
 # if an irregular becomes relevant, add it as its own root.
 _INFLECTION = r"(?:s|es|ed|ing|er|ers|est|ly|ion|ions|ive|al|ies|y)?"
 
-# Compile master filler regex.  Longer roots first so "product" doesn't lose
-# a greedy race to "pro".
+# Compile master filler regex as TWO alternations (critical correctness point):
+#   1. Inflectable roots + suffix  — "sell", "selling", "product", "products"
+#   2. Fixed roots, exact match    — "on", "an", "the", "i", "any"
+#
+# Longer roots first inside each alternation so e.g. "product" beats "pro".
+# The fixed-group alternation has NO trailing suffix pattern, which prevents
+# "on" + "ion" from ever matching "onion".
+def _alt(roots: Set[str]) -> str:
+    return "|".join(re.escape(r) for r in sorted(roots, key=len, reverse=True))
+
 _FILLER_RE = re.compile(
-    r"\b(?:" + "|".join(
-        re.escape(r) for r in sorted(_ALL_ROOTS, key=len, reverse=True)
-    ) + r")" + _INFLECTION + r"\b",
+    r"\b(?:"
+    + r"(?:" + _alt(_INFLECTABLE_ROOTS) + r")" + _INFLECTION
+    + r"|"
+    + r"(?:" + _alt(_FIXED_ROOTS) + r")"
+    + r")\b",
     re.IGNORECASE,
 )
 
@@ -178,14 +202,29 @@ _GUJARATI_FILLERS: Set[str] = {
 _GUJARATI_FILLER_RE = re.compile("|".join(re.escape(w) for w in _GUJARATI_FILLERS))
 
 # Fuzzy-match typo tolerance.
-# Only applies to tokens ≥4 chars (shorter tokens have too-high false-positive
-# rates under edit distance).  Cutoff 0.85 → "prodct" matches "product" but
-# "kapas" does NOT match "papas"/"paras"/etc.
+#
+# Two independent thresholds (separating them is critical for correctness):
+#
+#   _FUZZY_TOKEN_MIN_LEN = 4
+#     Minimum length of the USER TOKEN to be eligible for fuzzy checking.
+#     Short tokens (≤3 chars) have too-high collision rates under edit distance.
+#
+#   _FUZZY_ROOT_MIN_LEN  = 5
+#     Minimum length of ROOTS admitted to the fuzzy pool.  Short roots like
+#     "what", "find", "show" (4 chars) are dangerously close to real content
+#     words — "wheat" is 1 edit from "what" and would be wrongly filtered.
+#     The exact-match regex already covers short roots; fuzzy adds no value
+#     for them but creates collisions.
+#
+# Cutoff 0.85 → "prodct" matches "product" (ratio 0.92) but "kapas" does NOT
+# match "papas"/"paras"/etc.  With _FUZZY_ROOT_MIN_LEN=5, there's no 4-char
+# root left to collide with "wheat", "bean", "toes", etc.
 import difflib
 
-_FUZZY_CUTOFF = 0.85
-_FUZZY_MIN_LEN = 4
-_FUZZY_POOL = [r for r in _ALL_ROOTS if len(r) >= _FUZZY_MIN_LEN]
+_FUZZY_CUTOFF        = 0.85
+_FUZZY_TOKEN_MIN_LEN = 4
+_FUZZY_ROOT_MIN_LEN  = 5
+_FUZZY_POOL = [r for r in _ALL_ROOTS if len(r) >= _FUZZY_ROOT_MIN_LEN]
 
 
 def is_filler_token(token: str) -> bool:
@@ -212,7 +251,7 @@ def is_filler_token(token: str) -> bool:
     if t in _GUJARATI_FILLERS:
         return True
     # Fuzzy layer — typo tolerance (regex didn't match; is this a typo?)
-    if len(t) >= _FUZZY_MIN_LEN:
+    if len(t) >= _FUZZY_TOKEN_MIN_LEN:
         if difflib.get_close_matches(t, _FUZZY_POOL, n=1, cutoff=_FUZZY_CUTOFF):
             return True
     return False

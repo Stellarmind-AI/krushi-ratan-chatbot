@@ -642,23 +642,47 @@ class Orchestrator:
 
         compact_schema = "\n".join(schema_lines)
 
-        # Build keyword hint block — injected into prompt when F1 resolved the intent
-        # This tells the SQL generator EXACTLY what to search for, preventing it from
-        # guessing the keyword from an ambiguous short query like "kapas" or "ઘઉં".
-        keyword_hint_block = ""
+        # Build keyword hint block.
+        #
+        # Two paths:
+        #   (1) F1 keyword_hint set  → use that one keyword's variants (F1 already
+        #       resolved the ambiguity, we trust it).
+        #   (2) F1 keyword_hint not set → AUTO-DETECT every keyword in the query
+        #       against the KEYWORD_VARIANTS map and inject ALL their variants.
+        #
+        # Why (2) exists:
+        # Without an authoritative variant list, the LLM fills in Gujarati
+        # translations from its own training and picks the wrong language —
+        # e.g. Hindi 'કાંદા' for onion when the DB stores Gujarati 'ડુંગળી'.
+        # Auto-detection closes that guessing surface whenever the query names
+        # a keyword we've curated variants for.
+        hint_pairs: List[tuple] = []
         if keyword_hint:
             variants = KEYWORD_VARIANTS.get(keyword_hint.lower(),
                        KEYWORD_VARIANTS.get(keyword_hint, [keyword_hint]))
-            variants_sql = " OR ".join(
-                f"<column> LIKE '%{v}%'" for v in variants
+            hint_pairs.append((keyword_hint, list(variants)))
+        else:
+            hint_pairs = self._detect_keywords_in_query(query)
+
+        keyword_hint_block = ""
+        if hint_pairs:
+            source = "user clarification" if keyword_hint else "auto-detected from query"
+            lines = [
+                "",
+                f"KEYWORD SEARCH VARIANTS ({source}) — USE EXACTLY THESE, DO NOT INVENT OTHERS:",
+            ]
+            for matched, variants in hint_pairs:
+                variants_sql = " OR ".join(f"<column> LIKE '%{v}%'" for v in variants)
+                lines.append(f"  '{matched}' → {variants}")
+                lines.append(f"    SQL form: {variants_sql}")
+            lines.append(
+                "  Rules: apply these LIKE variants to the relevant name/title/product column."
             )
-            keyword_hint_block = (
-                f"\nKEYWORD HINT (from user clarification):\n"
-                f"  The user is asking about: {keyword_hint!r}\n"
-                f"  Search variants to use: {variants}\n"
-                f"  Use LIKE with OR across all variants — e.g.: {variants_sql}\n"
-                f"  Apply this search to the relevant name/title/product column.\n"
+            lines.append(
+                "  Do NOT translate keywords into Hindi, Marathi, or any other script — "
+                "use ONLY the variants listed above."
             )
+            keyword_hint_block = "\n".join(lines) + "\n"
 
         # Build intent note block — tells SQL generator exactly what domain to query
         intent_note_block = ""
@@ -707,8 +731,15 @@ RULES:
 1. Strip intent words before extracting product keywords:
    intent words = mare, maro, karvu, karu, che, purchase, from, kshop, levu, joiye, apo, batao, please
 2. Search each keyword INDEPENDENTLY with OR — never use full phrase LIKE
-3. For product names: search both English and Gujarati script
-   Examples: balwan+બલવાન, weeder+વીડર, kapas+કપાસ, pump+પંપ
+3. PRODUCT / CROP KEYWORDS — CRITICAL:
+   a) If a "KEYWORD SEARCH VARIANTS" section is present above, use ONLY the
+      variants listed there.  Do NOT add your own Gujarati/Hindi translations.
+      Example: if the section shows "'onion' → ['onion', 'dungli', 'kanda', 'ડુંગળી']",
+      your WHERE clause must search for those four strings and nothing else.
+      Do NOT invent 'કાંદા', 'प्याज', or any other equivalent.
+   b) If NO variants section is present for a keyword, search in exactly the
+      script(s) the user typed — do not translate.
+   c) Search each keyword INDEPENDENTLY with OR across the full variant list.
 4. JOINS — MANDATORY: for every primary table that has entries under its JOINS block,
    (a) copy those JOIN clauses verbatim into your FROM clause (JOIN vs LEFT JOIN exactly as shown),
    (b) in the SELECT list, return the joined tables' descriptive columns
@@ -827,6 +858,59 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
         if isinstance(parsed, list):
             return [x for x in parsed if x in available]
         return []
+
+    # ── Keyword auto-detection (for SQL-generation prompt) ────────────────────
+
+    @staticmethod
+    def _detect_keywords_in_query(query: str) -> List[tuple]:
+        """
+        Scan the user's query for any token matching the curated KEYWORD_VARIANTS
+        map and return [(matched_form, variants), ...] — deduped by variant set.
+
+        Why this exists:
+          When F1 does NOT provide a keyword_hint, the SQL-generation prompt has
+          no authoritative cross-language mapping to anchor the LLM.  The LLM
+          then invents Gujarati/Hindi equivalents from its own training, and
+          frequently picks the wrong language (e.g. Hindi 'કાંદા' for onion
+          instead of Gujarati 'ડુંગળી' which is what the DB stores).
+
+          This function pulls the real variants from the same KEYWORD_VARIANTS
+          map that the F1 path uses, so both paths share one source of truth.
+
+        Matching:
+          - Single tokens: 'onion', 'ડુંગળી', 'kanda', 'dungli'
+          - Bigrams:       'motor pump', 'power weeder'
+          - Case-insensitive for English/romanized; exact-script for Gujarati
+            (KEYWORD_VARIANTS is already indexed under all three forms).
+
+        Deduplication:
+          If the query says 'onion ડુંગળી', both tokens map to the same variant
+          list — we return only one entry to keep the prompt compact.
+        """
+        if not query:
+            return []
+        # Tokenize — keep English/Gujarati/Devanagari ranges
+        tokens = re.findall(
+            r"[\w઀-૿ऀ-ॿ]+",
+            query.lower(),
+        )
+        # Build candidate list: unigrams + bigrams
+        candidates: List[str] = list(tokens)
+        for i in range(len(tokens) - 1):
+            candidates.append(f"{tokens[i]} {tokens[i+1]}")
+
+        matched: List[tuple] = []
+        seen: set = set()
+        for cand in candidates:
+            variants = KEYWORD_VARIANTS.get(cand)
+            if variants is None:
+                continue
+            key = tuple(variants)
+            if key in seen:
+                continue
+            seen.add(key)
+            matched.append((cand, list(variants)))
+        return matched
 
     # ── Exploratory query helpers ──────────────────────────────────────────────
 
