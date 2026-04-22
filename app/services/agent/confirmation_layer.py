@@ -105,10 +105,40 @@ _NAV_SIGNALS: List[str] = [
 
 def _is_navigation_query(q: str) -> bool:
     """
-    Returns True if the query is asking HOW TO do something
-    rather than requesting data. F1 must never intercept these.
+    Returns True if the query is asking HOW TO do something (step-by-step)
+    rather than requesting data or asking how something WORKS (conceptual).
+
+    Anti-nav patterns: if the query also contains words indicating a conceptual
+    question ("how does X work/happen"), return False even if a nav signal
+    matched. These are GENERAL flow questions, not navigation.
+
+    Examples:
+      "કેવી રીતે કરવું" (how to do)                → True  (NAVIGATION)
+      "કેવી રીતે કામ કરે છે" (how does it work)     → False (GENERAL)
+      "કેવી રીતે થાય છે" (how does it happen)       → False (GENERAL)
+      "સંપર્ક કેવી રીતે થાય છે" (how does contact happen) → False (GENERAL)
+      "પ્રક્રિયા કેવી રીતે કામ કરે છે" (how does process work) → False (GENERAL)
     """
-    return any(sig in q for sig in _NAV_SIGNALS)
+    has_nav = any(sig in q for sig in _NAV_SIGNALS)
+    if not has_nav:
+        return False
+
+    # Anti-nav: "how does X work/happen" is conceptual, not step-by-step
+    _ANTI_NAV = [
+        # Gujarati script — "works", "happens", "process works"
+        "કામ કરે છે", "કામ કરે", "થાય છે",
+        "પ્રક્રિયા કેવી", "પ્રક્રિયા શું",
+        # English — "how does X work", "how does X happen"
+        "how does", "how is", "process work", "works",
+        # Romanized Gujarati
+        "kaam kare che", "kaam kare", "thay che",
+        "prakriya kevi", "prakriya shu",
+        "process kevi rite kaam",
+    ]
+    if any(anti in q for anti in _ANTI_NAV):
+        return False
+
+    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -274,6 +304,23 @@ def _score_query(q: str) -> Optional[tuple]:
 # Trigger keyword lists — EN + Romanized GU + Gujarati script
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Scenario 0 (NEW): Generic "crops" category word — no specific crop named.
+# e.g. "what crops are available", "list of crops", "બધા પાક".
+# Combined with Scenario 1 (specific crop names), ALL crop-related queries
+# short-circuit to crop_price because there's only ONE data source: mandi/yard.
+_GENERIC_CROPS_KEYWORDS: List[str] = [
+    # English
+    "crop", "crops", "all crops", "what crops", "which crops",
+    "list of crops", "list crops", "available crops",
+    # Romanized Gujarati
+    "pak", "pako", "badha pak", "kaya pak", "kayi pak", "kaye pak",
+    "pak ni list", "pak list", "pak uplabdh",
+    # Gujarati script
+    "પાક", "પાકો", "બધા પાક", "કયો પાક", "કયા પાક", "કઈ પાક",
+    "પાક ની યાદી", "પાક યાદી", "ઉપલબ્ધ પાક",
+]
+
+
 # Scenario 1: Crop names
 _CROP_KEYWORDS: List[str] = [
     # English / Romanized
@@ -416,6 +463,21 @@ _CROPS_PRICE_ONLY: set = {
 }
 
 
+# Gujarati-script → English key map for _CROPS_WITH_SEED_DATA lookups.
+# Used by the crop short-circuit in ConfirmationLayer.check() and by
+# _build_crop_options below. Shared so both stay in sync.
+_GU_TO_EN_CROPS: Dict[str, str] = {
+    "કપાસ": "kapas", "ઘઉં": "wheat", "ઘઉ": "wheat",
+    "બાજરો": "bajra", "બાજરી": "bajra", "જુવાર": "jowar",
+    "મકાઈ": "corn", "મગ": "mung", "ચણા": "chana",
+    "તલ": "tal", "ચોખા": "chaval", "ડાંગર": "chaval",
+    "સોયાબીન": "soybean", "મગફળી": "magfali",
+    "ડુંગળી": "onion", "ટામેટા": "tomato", "ટામેટું": "tomato",
+    "બટાકા": "potato", "બટેટા": "potato", "લસણ": "lasan",
+    "શેરડી": "sugarcane",
+}
+
+
 def _build_crop_options(kw: str, q: str) -> List[ClarificationOption]:
     """
     Build crop options with only the domains that HAVE data for this keyword.
@@ -429,18 +491,8 @@ def _build_crop_options(kw: str, q: str) -> List[ClarificationOption]:
     has_seed = any(h in q for h in _SEED_HINTS)
 
     # Normalize kw_low to also check English equivalents for Gujarati input
-    # so "કપાસ" resolves seed_data correctly
-    _GU_TO_EN = {
-        "કપાસ": "kapas", "ઘઉં": "wheat", "ઘઉ": "wheat",
-        "બાજરો": "bajra", "બાજરી": "bajra", "જુવાર": "jowar",
-        "મકાઈ": "corn", "મગ": "mung", "ચણા": "chana",
-        "તલ": "tal", "ચોખા": "chaval", "ડાંગર": "chaval",
-        "સોયાબીન": "soybean", "મગફળી": "magfali",
-        "ડુંગળી": "onion", "ટામેટા": "tomato", "ટામેટું": "tomato",
-        "બટાકા": "potato", "બટેટા": "potato", "લસણ": "lasan",
-        "શેરડી": "sugarcane",
-    }
-    kw_check = _GU_TO_EN.get(kw_low, kw_low)  # map Gujarati → English for set lookups
+    # so "કપાસ" resolves seed_data correctly. Uses shared _GU_TO_EN_CROPS map.
+    kw_check = _GU_TO_EN_CROPS.get(kw_low, kw_low)  # map Gujarati → English for set lookups
 
     # Base options — always available for crops
     opt_price = ClarificationOption(f"Check {k} mandi price",           "📈", "crop_price",       "crop_price")
@@ -544,7 +596,84 @@ class ConfirmationLayer:
             logger.info(f"✅ F1 NAV BYPASS — navigation question detected: {user_query[:60]!r}")
             return None
 
-        # ── Step 1: Confidence scoring ────────────────────────────────────
+        # ── Step 1: Crop short-circuit (runs FIRST for crop queries) ──────
+        # PER PRODUCT RULE: crops only exist in ONE place — mandi/yard prices.
+        # So ANY crop-related query (generic "crops" OR specific crop name)
+        # bypasses F1 and goes straight to crop_price.
+        #
+        # EXCEPTION: if the user mentions "seed" AND the specific crop is in
+        # the _CROPS_WITH_SEED_DATA whitelist, route to seed_info instead.
+        # If seed data is NOT present for that crop (e.g. onion in _CROPS_PRICE_ONLY),
+        # still route to crop_price — do NOT fall into F1 clarification.
+        #
+        # This runs BEFORE confidence scoring so "onion seed" doesn't get
+        # mis-scored as seed_info from the word "seed" alone.
+        import re as _re
+
+        def _word_match(kw: str, text: str) -> bool:
+            # Multi-word phrases: simple substring match.
+            # Single word: Unicode-aware word boundary (handles Gujarati script).
+            if " " in kw:
+                return kw in text
+            return bool(_re.search(
+                r"(?<![a-zA-Zઁ-૿])" + _re.escape(kw) + r"(?![a-zA-Zઁ-૿])",
+                text,
+            ))
+
+        has_seed_word = any(h in q for h in _SEED_HINTS)
+
+        # 1a. Specific crop name (check first — more precise than generic "crops")
+        # Sort longest-first so "rice crop" matches before "rice".
+        for kw in sorted(_CROP_KEYWORDS, key=len, reverse=True):
+            if not _word_match(kw, q):
+                continue
+
+            # Seed override: user said "seed" AND this crop has seed data in DB
+            kw_low   = kw.lower()
+            kw_check = _GU_TO_EN_CROPS.get(kw_low, kw_low)
+            crop_has_seed_data = (
+                kw_low   in _CROPS_WITH_SEED_DATA or
+                kw_check in _CROPS_WITH_SEED_DATA
+            )
+            if has_seed_word and crop_has_seed_data:
+                logger.info(f"✅ F1 CROP→SEED | keyword='{kw}' (has seed data) → seed_info")
+                return ConfirmedIntent(intent_key="seed_info", confidence=1.0, domain="seed_info")
+
+            # Default for all crop queries (including "onion seed" where seed data absent)
+            logger.info(f"✅ F1 CROP→PRICE | keyword='{kw}' → crop_price")
+            return ConfirmedIntent(intent_key="crop_price", confidence=1.0, domain="crop_price")
+
+        # 1b. Generic "crops" category word — no specific crop named.
+        # Always crop_price (can't check seed whitelist without a specific crop).
+        for kw in sorted(_GENERIC_CROPS_KEYWORDS, key=len, reverse=True):
+            if _word_match(kw, q):
+                logger.info(f"✅ F1 GENERIC-CROPS | keyword='{kw}' → crop_price")
+                return ConfirmedIntent(intent_key="crop_price", confidence=1.0, domain="crop_price")
+
+        # ── Step 1c: Mechanism / process query bypass ──────────────────
+        # When the user is asking HOW SOMETHING WORKS conceptually (not asking
+        # for data), let the route agent decide. Without this bypass, words
+        # like "ખરીદ" (buy) and "વેચ" (sell) score high for buy_sell_product
+        # and force SQL flow — but the user is asking about the PROCESS, not
+        # requesting actual listings.
+        #
+        # Indicators: "પ્રક્રિયા" (process), "કામ કરે છે" (works),
+        # "થાય છે" (happens), "how does", "process work"
+        _MECHANISM_SIGNALS = [
+            # Gujarati script
+            "કામ કરે છે", "કામ કરે", "થાય છે",
+            "પ્રક્રિયા કેવી", "પ્રક્રિયા શું",
+            # English
+            "how does", "how is", "process work",
+            # Romanized Gujarati
+            "kaam kare che", "kaam kare", "thay che",
+            "prakriya kevi", "prakriya shu",
+        ]
+        if any(sig in q for sig in _MECHANISM_SIGNALS):
+            logger.info(f"✅ F1 MECHANISM BYPASS — conceptual query, letting route agent decide: {user_query[:60]!r}")
+            return None
+
+        # ── Step 2: Confidence scoring (non-crop, non-mechanism queries) ──
         scored = _score_query(q)
         if scored:
             intent_key, confidence = scored
@@ -552,18 +681,7 @@ class ConfirmationLayer:
                 logger.info(f"✅ F1 BYPASSED | intent={intent_key} confidence={confidence:.0%}")
                 return ConfirmedIntent(intent_key=intent_key, confidence=confidence, domain=intent_key)
 
-        # ── Step 2: Scenario keyword matching ────────────────────────────
-
-        # Scenario 1: Crop name
-        for kw in _CROP_KEYWORDS:
-            if kw in q:
-                logger.info(f"🔔 F1 triggered | scenario=crop_name keyword='{kw}'")
-                return ClarificationRequest(
-                    question=f"What would you like to know about '{kw.capitalize()}'?",
-                    options=_build_crop_options(kw, q),
-                    scenario="crop_name",
-                    matched_keyword=kw,
-                )
+        # ── Step 3: Remaining scenario keyword matching ──────────────────
 
         # Scenario 2: Generic product
         for kw in _PRODUCT_KEYWORDS:

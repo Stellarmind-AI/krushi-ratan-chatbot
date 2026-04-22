@@ -71,7 +71,7 @@ NAVIGATION
   - How to contact support
   - How to update profile
   - How to use the app / what features are available (step-by-step)
-  - How to list an old item for sale / how does buy-sell process work
+  - How to list an old item for sale
   - How to sell crops / pak vechuv kevi rite
   - How to BUY CROPS from farmers (company role crop buying process)
   - I want to buy crops / mane pak kharido / pak kharidu / maro pak kharidu
@@ -94,6 +94,8 @@ GENERAL
   - Does the app show government schemes for farmers? (gq_016)
   - How does the AI chatbot work? (gq_017)
   - How does buying work on the Buy/Sell marketplace? (gq_018)
+  - How does the process of buying and selling farming equipment and animals work? (gq_038)
+  - How does the buyer contact the seller? (gq_039)
   - How does Krushi Ratn AI help farmers? (gq_019)
   - What agricultural products are available in K-Store? (overview, not live prices) (gq_021)
   - What is a yard in Krushi Ratn? (concept explanation, not a specific yard lookup) (gq_024)
@@ -109,7 +111,7 @@ GENERAL
   - What should I do if I face issues with the app? (troubleshooting) (gq_035)
   - What languages does the chatbot support? (gq_036)
   - What features are available on the home screen? (gq_037)
-  - What makes Krushi Ratn different from other apps? (gq_038)
+  - What makes Krushi Ratn different from other apps? (gq_037)
 
 GREETING
   Pure greeting only with NO real question.
@@ -151,6 +153,13 @@ CRITICAL DISAMBIGUATION — these pairs are easy to confuse:
 
   "What features are on the home screen?" (overview) → GENERAL
   "How do I use the home screen?" (step-by-step) → NAVIGATION
+
+  "How does the buy-sell process work?" (explaining the mechanism) → GENERAL
+  "How does buying and selling work in the app?" (explaining the mechanism) → GENERAL
+  "ખરીદવા-વેચવાની પ્રક્રિયા કેવી રીતે કામ કરે છે?" (explaining mechanism) → GENERAL
+  "ખરીદનાર અને વેચનાર વચ્ચે સંપર્ક કેવી રીતે થાય છે?" (explaining how contact works) → GENERAL
+  "How do I list an item for sale?" (step-by-step instructions) → NAVIGATION
+  "How do I post an ad on buy/sell?" (step-by-step instructions) → NAVIGATION
 
   "What makes Krushi Ratn different?" (comparison/overview) → GENERAL
   "How do I switch roles?" (step-by-step) → NAVIGATION
@@ -202,6 +211,12 @@ Examples:
   "home screen ma shu che" → GENERAL
   "krushi ratn bija apps thi alag shu che" → GENERAL
   "home screen features" → GENERAL
+  "buy sell process kevi rite kaam kare" → GENERAL
+  "kharidi vechan ni prakriya shu che" → GENERAL
+  "how does buy sell work" → GENERAL
+  "buyer seller contact kevi rite thay" → GENERAL
+  "ખરીદવા-વેચવાની પ્રક્રિયા કેવી રીતે કામ કરે છે?" → GENERAL
+  "ખરીદનાર અને વેચનાર વચ્ચે સંપર્ક કેવી રીતે થાય છે?" → GENERAL
   "role switch kevi rite" → NAVIGATION
   "video kevi rite upload karvu" → NAVIGATION
   "mobile number change kevi rite" → NAVIGATION
