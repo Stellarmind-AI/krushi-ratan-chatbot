@@ -31,10 +31,13 @@ logger = get_logger("knowledge_cache")
 # Refresh interval in seconds (30 minutes)
 _REFRESH_INTERVAL = 30 * 60
 
-# Words that are TABLE NAMES, not actual product/crop names.
+# Words that are TABLE/CATEGORY NAMES, not actual product/crop names.
 # When the user says these, they're browsing a category, not searching for an item.
 # Example: "I want to buy seeds" = browse seeds catalog, not find a seed named "seeds"
-_BROWSE_KEYWORDS: Set[str] = {
+#
+# Public — also used by orchestrator._is_exploratory_query to detect queries
+# like "tell me about the product" where the only surviving word is a category name.
+BROWSE_KEYWORDS: Set[str] = {
     "seeds", "seed", "બીજ",
     "products", "product", "items", "item", "ઉત્પાદ", "વસ્તુ",
     "crops", "crop", "પાક",
@@ -42,6 +45,8 @@ _BROWSE_KEYWORDS: Set[str] = {
     "news", "samachar", "khabar", "સમાચાર",
     "prices", "bhav", "ભાવ",  # generic — not tied to a specific crop
     "categories", "category", "શ્રેણી",
+    "yard", "yards", "mandi", "યાર્ડ", "મંડી",
+    "order", "orders", "ઓર્ડર",
 }
 
 
@@ -96,7 +101,7 @@ class KnowledgeCache:
         """
         if not keyword:
             return False
-        return keyword.lower().strip() in _BROWSE_KEYWORDS
+        return keyword.lower().strip() in BROWSE_KEYWORDS
 
     def is_seed_variety(self, keyword: str) -> bool:
         """True if keyword matches an actual seed variety name."""

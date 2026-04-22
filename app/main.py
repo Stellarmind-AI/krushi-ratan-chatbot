@@ -53,7 +53,8 @@ async def lifespan(app: FastAPI):
     logger.info("📁 Loading database schemas and tools...")
     schema_generator = initialize_schemas(
         schemas_dir=settings.SCHEMA_DIR,
-        tools_dir=settings.TOOLS_DIR
+        tools_dir=settings.TOOLS_DIR,
+        privacy_policy_path=settings.SCHEMA_PRIVACY_POLICY_PATH,
     )
 
     logger.info("🤖 Initializing AI agent orchestrator...")

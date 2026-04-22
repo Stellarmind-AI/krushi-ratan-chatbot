@@ -22,19 +22,59 @@ from typing import List, Dict, Any, Optional
 
 from app.services.agent.route_agent    import get_route_agent, FlowType
 from app.services.agent.query_cache    import get_query_cache, STRIP_WORDS
+from app.services.knowledge_cache      import BROWSE_KEYWORDS
 from app.services.agent.intent_router  import get_intent_router
 from app.services.agent.tool_selector  import get_tool_selector, build_fk_deps_from_tools
 from app.services.agent.answer_generator import get_answer_generator
 from app.services.agent.knowledge_handler import get_knowledge_handler
 from app.services.agent.status_filter     import filter_query_results
 from app.services.database.query_executor import get_query_executor
+from app.services.database.query_validator import query_validator
 from app.utils.schema_generator        import SchemaGenerator
+from app.utils.privacy_policy          import get_privacy_policy
 from app.services.llm.manager          import get_llm_manager
 from app.models.chat_models            import LLMMessage
 from app.core.logger                   import get_agent_logger, Timer
 from app.core.config                   import settings
 
 logger = get_agent_logger()
+
+
+# ── Keyword variant map (built once, used by SQL generation) ──────────────────
+# Maps a keyword (EN, Romanized, or Gujarati) → all search variants.
+# Used when F1 Confirmation Layer provides a keyword_hint.
+_KV_BASE: Dict[str, list] = {
+    "kapas":      ["kapas", "cotton", "કપાસ"],
+    "wheat":      ["wheat", "ghau", "gahu", "ઘઉં", "ઘઉ"],
+    "bajra":      ["bajra", "bajri", "bajro", "બાજરો", "બાજરી"],
+    "magfali":    ["magfali", "groundnut", "moongfali", "મગફળી"],
+    "onion":      ["onion", "dungli", "kanda", "ડુંગળી"],
+    "tomato":     ["tomato", "tameta", "ટામેટા", "ટામેટું"],
+    "potato":     ["potato", "bataka", "bateta", "બટાકા", "બટેટા"],
+    "garlic":     ["garlic", "lasan", "લસણ"],
+    "chana":      ["chana", "ghana", "channa", "ચણા"],
+    "mung":       ["mung", "moong", "મગ"],
+    "jowar":      ["jowar", "jwari", "jwar", "જુવાર"],
+    "corn":       ["corn", "maize", "makai", "મકાઈ"],
+    "soybean":    ["soybean", "soya", "સોયાબીન"],
+    "tal":        ["tal", "sesame", "તલ"],
+    "chaval":     ["chaval", "rice", "ચોખા", "ડાંગર"],
+    "sugarcane":  ["sugarcane", "sherdio", "શેરડી"],
+    "tractor":    ["tractor", "ટ્રેક્ટર"],
+    "pump":       ["pump", "motor pump", "water pump", "પંપ", "મોટર પંપ"],
+    "thresher":   ["thresher", "thresar", "thraser", "થ્રેસર", "થ્રેશર"],
+    "thresar":    ["thresher", "thresar", "thraser", "થ્રેસર", "થ્રેશર"],
+    "sprayer":    ["sprayer", "duster", "સ્પ્રેયર", "ફ્વારો"],
+    "weeder":     ["weeder", "power weeder", "વીડર"],
+    "seeder":     ["seeder", "planter", "સીડર"],
+}
+# Expand: Gujarati script keys point to the same variant lists
+KEYWORD_VARIANTS: Dict[str, list] = {}
+for _en_key, _var_list in _KV_BASE.items():
+    KEYWORD_VARIANTS[_en_key] = _var_list
+    for _v in _var_list:
+        if _v not in KEYWORD_VARIANTS:
+            KEYWORD_VARIANTS[_v] = _var_list
 
 
 class Orchestrator:
@@ -55,6 +95,7 @@ class Orchestrator:
         self.knowledge_handler = get_knowledge_handler()
         self.query_executor    = get_query_executor()
         self.llm_manager       = get_llm_manager()
+        self.privacy_policy    = get_privacy_policy()
 
         # Schema data
         self.condensed_schema: dict = {}
@@ -123,7 +164,8 @@ class Orchestrator:
 
             notes = [
                 n for n in tool.get("notes", [])
-                if "deleted_at" in n or "status" in n or "STRIP" in n or "keyword" in n.lower()
+                if "deleted_at" in n or "status" in n or "STRIP" in n
+                   or "keyword" in n.lower() or "location" in n.lower()
             ]
             note_str = " | ".join(notes) if notes else ""
 
@@ -349,6 +391,7 @@ class Orchestrator:
             from app.services.agent.confirmation_layer import get_confirmation_layer
             _cl = get_confirmation_layer()
             f1_injected_tools = _cl.get_confirmed_tables(confirmed_intent)
+            f1_injected_tools = self.privacy_policy.filter_tool_names(f1_injected_tools)
             intent_note       = _cl.get_intent_note(confirmed_intent)
             if f1_injected_tools:
                 logger.info(
@@ -366,6 +409,17 @@ class Orchestrator:
         cached = self.query_cache.get(query)
         if cached:
             queries, selected_tools = cached
+            selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
+            all_valid, validation_errors = query_validator.validate_batch([q.get("sql", "") for q in queries])
+            if not selected_tools or not all_valid:
+                logger.warning(
+                    f"Privacy policy rejected cached SQL; invalidating cache | "
+                    f"errors={validation_errors}"
+                )
+                self.query_cache.invalidate(query)
+                cached = None
+
+        if cached:
             logger.cache_hit(query, selected_tools)
             stats = self.query_cache.stats
             logger.info(f"📊 Cache: {stats['hit_rate_percent']}% hit rate | "
@@ -401,6 +455,7 @@ class Orchestrator:
                 routed = self.intent_router.route(query)
             if routed:
                 selected_tools, rule_name = routed
+                selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
                 logger.intent_routed(rule_name, selected_tools)
                 logger.step_done("STEP 3 / INTENT ROUTER", t.elapsed_ms,
                                  rule=rule_name, tables=str(selected_tools))
@@ -415,6 +470,7 @@ class Orchestrator:
             available = self.schema_generator.get_available_tool_names()
             if not available and self._virtual_tools:
                 available = [f"query_{t}" for t in sorted(self._virtual_tools.keys())]
+            available = self.privacy_policy.filter_tool_names(available)
 
             with Timer() as t:
                 tool_resp = await self.tool_selector.select_tools(
@@ -423,6 +479,7 @@ class Orchestrator:
                     available_tools=available,
                 )
             selected_tools = tool_resp.selected_tools
+            selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
             logger.step_done("STEP 4 / TOOL SELECTION", t.elapsed_ms,
                              tools=str(selected_tools))
             logger.tool_selection(selected_tools, query)
@@ -431,6 +488,7 @@ class Orchestrator:
                 logger.warning("Tool selection returned nothing — relaxed retry")
                 with Timer() as t2:
                     selected_tools = await self._select_tools_relaxed(query, available)
+                    selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
                 logger.step_done("STEP 4 / TOOL SELECTION RELAXED", t2.elapsed_ms,
                                  tools=str(selected_tools))
                 if not selected_tools:
@@ -526,6 +584,7 @@ class Orchestrator:
           LLM only sees filtered rows. Frontend receives both.
         """
         # ── Status filter (post-SQL, pre-LLM) ───────────────────────────────
+        query_results = self.privacy_policy.sanitize_query_results(query_results)
         logger.step("STEP 7a / STATUS FILTER", f"{len(query_results)} result sets")
         filtered_results, any_filtered = filter_query_results(query_results)
         if any_filtered:
@@ -566,7 +625,8 @@ class Orchestrator:
 
     async def _generate_sql_compact(self, query: str, selected_tools: List[str], keyword_hint: str = "", intent_note: str = "") -> List[Dict]:
         """Generate SQL using pre-compiled compact schemas. ~60% fewer tokens than full schema."""
-        available = set(self.schema_generator.get_available_tool_names())
+        available = set(self.privacy_policy.filter_tool_names(self.schema_generator.get_available_tool_names()))
+        selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
         schema_lines = []
         for tool_name in selected_tools:
             if tool_name not in available:
@@ -588,43 +648,8 @@ class Orchestrator:
         # guessing the keyword from an ambiguous short query like "kapas" or "ઘઉં".
         keyword_hint_block = ""
         if keyword_hint:
-            # Build all search variants: original + common transliterations
-            # Canonical keyword → all search variants (EN + Romanized + Gujarati script)
-            # ALSO includes Gujarati script as direct keys so Gujarati input resolves correctly
-            _KV_BASE = {
-                "kapas":      ["kapas", "cotton", "કપાસ"],
-                "wheat":      ["wheat", "ghau", "gahu", "ઘઉં", "ઘઉ"],
-                "bajra":      ["bajra", "bajri", "bajro", "બાજરો", "બાજરી"],
-                "magfali":    ["magfali", "groundnut", "moongfali", "મગફળી"],
-                "onion":      ["onion", "dungli", "kanda", "ડુંગળી"],
-                "tomato":     ["tomato", "tameta", "ટામેટા", "ટામેટું"],
-                "potato":     ["potato", "bataka", "bateta", "બટાકા", "બટેટા"],
-                "garlic":     ["garlic", "lasan", "લસણ"],
-                "chana":      ["chana", "ghana", "channa", "ચણા"],
-                "mung":       ["mung", "moong", "મગ"],
-                "jowar":      ["jowar", "jwari", "jwar", "જુવાર"],
-                "corn":       ["corn", "maize", "makai", "મકાઈ"],
-                "soybean":    ["soybean", "soya", "સોયાબીન"],
-                "tal":        ["tal", "sesame", "તલ"],
-                "chaval":     ["chaval", "rice", "ચોખા", "ડાંગર"],
-                "sugarcane":  ["sugarcane", "sherdio", "શેરડી"],
-                "tractor":    ["tractor", "ટ્રેક્ટર"],
-                "pump":       ["pump", "motor pump", "water pump", "પંપ", "મોટર પંપ"],
-                "thresher":   ["thresher", "thresar", "thraser", "થ્રેસર", "થ્રેશર"],
-                "thresar":    ["thresher", "thresar", "thraser", "થ્રેસર", "થ્રેશર"],
-                "sprayer":    ["sprayer", "duster", "સ્પ્રેયર", "ફ્વારો"],
-                "weeder":     ["weeder", "power weeder", "વીડર"],
-                "seeder":     ["seeder", "planter", "સીડર"],
-            }
-            # Add Gujarati script keys pointing to same variants (so "કપાસ" resolves correctly)
-            _KEYWORD_VARIANTS = {}
-            for en_key, var_list in _KV_BASE.items():
-                _KEYWORD_VARIANTS[en_key] = var_list
-                for v in var_list:
-                    if v not in _KEYWORD_VARIANTS:
-                        _KEYWORD_VARIANTS[v] = var_list
-            variants = _KEYWORD_VARIANTS.get(keyword_hint.lower(),
-                       _KEYWORD_VARIANTS.get(keyword_hint, [keyword_hint]))
+            variants = KEYWORD_VARIANTS.get(keyword_hint.lower(),
+                       KEYWORD_VARIANTS.get(keyword_hint, [keyword_hint]))
             variants_sql = " OR ".join(
                 f"<column> LIKE '%{v}%'" for v in variants
             )
@@ -697,20 +722,32 @@ RULES:
 6. For kshop_products: always add AND status = 1
 7. NEVER generate SELECT * without WHERE clause
 8. NEVER generate a query with no WHERE clause
-9. CITY/LOCATION NAMES — CRITICAL: Never use exact match (=) for city/taluka/state names.
-   Always use LIKE for location names. City names may be stored in Gujarati script.
-   Example: cities.name = 'Mehsana' → WRONG
-   Correct: (cities.name LIKE '%Mehsana%' OR cities.name LIKE '%મહેસાણા%' OR cities.name LIKE '%Mahesana%')
-   Common Gujarati city transliterations to always include:
-   Ahmedabad→અમદાવાદ, Surat→સુરત, Vadodara→વડોદરા, Rajkot→રાજકોટ,
-   Mehsana→મહેસાણા, Gandhinagar→ગાંધીનગર, Anand→આણંદ, Bharuch→ભરૂચ,
-   Junagadh→જૂનાગઢ, Bhavnagar→ભાવનગર, Jamnagar→જામનગર, Amreli→અમરેલી
+9. LOCATION NAMES — CRITICAL:
+   a) Never use exact match (=) for location names. Always use LIKE with both English and Gujarati script.
+   b) A location name can be a YARD name, a TALUKA name, or a CITY name — you cannot know which in advance.
+      Yard names are typically named after the taluka or city they are in (e.g. yard "ગોંડલ" is in taluka "ગોંડલ").
+   c) When filtering products/prices by location, ALWAYS join yards to BOTH cities AND talukas,
+      then search ALL THREE name columns with OR:
+        LEFT JOIN cities c ON y.city_id = c.id
+        LEFT JOIN talukas t ON y.taluka_id = t.id
+        WHERE (y.name LIKE '%LocationName%' OR c.name LIKE '%LocationName%' OR t.name LIKE '%LocationName%')
+   d) Include both English and Gujarati script variants in each LIKE:
+        (y.name LIKE '%Gondal%' OR y.name LIKE '%ગોંડલ%'
+         OR c.name LIKE '%Gondal%' OR c.name LIKE '%ગોંડલ%'
+         OR t.name LIKE '%Gondal%' OR t.name LIKE '%ગોંડલ%')
+   e) NEVER filter location through only ONE of cities/talukas/yards — always search all three.
 10. STATUS COLUMN — CRITICAL: NEVER add any status condition to WHERE clause for any table
     EXCEPT kshop_products (rule 6 above). Do NOT add AND status = 'active', AND status = 1,
     AND is_sold = 0, or any other status/availability filter on any other table.
     Status filtering is handled automatically after data retrieval — adding it in SQL
     will cause rows with valid non-'active' status values (e.g. sold_out, available)
     to be silently excluded from results.
+11. TRANSITIVE JOINS — when a table references another table that itself has JOINs,
+    chain them. For example, products→yards gives you yard_id. But yards→cities AND
+    yards→talukas give you the location. So for product location queries, your FROM clause
+    must include: products JOIN yards ON ... LEFT JOIN cities ON yards.city_id = cities.id
+    LEFT JOIN talukas ON yards.taluka_id = talukas.id. Apply this chaining for ALL tables
+    — always follow the full FK path shown in the JOINS block of each table.
 
 OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
 [{{"table_name": "primary_table", "sql": "SELECT ... FROM ... WHERE ..."}}]"""
@@ -803,40 +840,110 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
         # Algorithm:
         #   1. Lowercase + strip punctuation
         #   2. Build domain_words from selected_tools table name components
-        #      e.g. query_buy_sell_products -> {buy, sell, products}
-        #   3. Combine STRIP_WORDS + domain_words into one exclusion set
+        #      WITH singular/plural variants (products→product, category→categories)
+        #   3. Combine STRIP_WORDS + domain_words + BROWSE_KEYWORDS into exclusion set
+        #      BROWSE_KEYWORDS covers category synonyms the domain_words miss:
+        #      "crop" (synonym of products table), "mandi" (synonym of yards), etc.
         #   4. If no word survives exclusion (length > 1) -> exploratory
         import re as _re
         q_clean = _re.sub(r"[^\w\s]", " ", query.lower())
         words   = q_clean.split()
 
         # Extract component words from every selected table name
+        # + singular/plural variants for robust matching
         domain_words: set = set()
         for tool in (selected_tools or []):
             table = tool.replace("query_", "").replace("_", " ")
             for w in table.split():
                 if len(w) > 1:
                     domain_words.add(w)
+                    # Plural → singular: "products" → "product", "categories" → "category"
+                    if w.endswith("ies") and len(w) > 4:
+                        domain_words.add(w[:-3] + "y")
+                    elif w.endswith("s") and len(w) > 3:
+                        domain_words.add(w[:-1])
+                    # Singular → plural: "product" → "products"
+                    if not w.endswith("s"):
+                        domain_words.add(w + "s")
 
-        exclusion = STRIP_WORDS | domain_words
+        exclusion = STRIP_WORDS | domain_words | BROWSE_KEYWORDS
         meaningful = [w for w in words if w not in exclusion and len(w) > 1]
         return len(meaningful) == 0
 
     @staticmethod
     def _build_exploratory_sql(primary_table: str, compiled_schema: str) -> dict:
-        # Build a simple recent-records fallback SQL for exploratory queries.
-        # Fetches the 10 most recently created rows with no keyword filter.
-        # Respects soft-delete and kshop_products status rule.
+        """
+        Build a recent-records fallback SQL for exploratory queries.
+        Fetches 10 most recent rows with NO keyword filter.
+
+        Parses the pre-compiled schema to:
+          1. Include JOIN clauses so FK columns resolve to human-readable names
+          2. Replace raw _id columns with joined_table.name in SELECT
+          3. Skip metadata columns (id, updated_at, deleted_at) for cleaner output
+        """
+        schema = compiled_schema or ""
+
+        # ── WHERE clauses ──
         clauses = []
-        if "deleted_at" in (compiled_schema or ""):
+        if "deleted_at" in schema:
             clauses.append(f"{primary_table}.deleted_at IS NULL")
         if primary_table == "kshop_products":
             clauses.append(f"{primary_table}.status = 1")
 
+        # ── Parse JOINS block → map FK column to (join_clause, ref_table) ──
+        # Compiled schema format:
+        #   JOINS:
+        #     JOIN sub_categories ON products.subcategory_id = sub_categories.id
+        #     LEFT JOIN yards ON products.yard_id = yards.id
+        fk_map: Dict[str, str] = {}       # FK col → ref_table
+        join_clauses: List[str] = []
+        joins_match = re.search(r"JOINS:\n(.*?)(?:\n  [A-Z]|\Z)", schema, re.DOTALL)
+        if joins_match:
+            for line in joins_match.group(1).strip().splitlines():
+                line = line.strip()
+                if not line or line.startswith("(no"):
+                    continue
+                # Extract: "LEFT JOIN yards ON products.yard_id = yards.id"
+                m = re.match(
+                    r"((?:LEFT\s+)?JOIN)\s+(\w+)\s+ON\s+\w+\.(\w+)\s*=\s*\w+\.\w+",
+                    line, re.IGNORECASE,
+                )
+                if m:
+                    ref_table = m.group(2)
+                    fk_col = m.group(3)       # e.g. "yard_id"
+                    fk_map[fk_col] = ref_table
+                    join_clauses.append(line)
+
+        # ── Parse COLUMNS → build SELECT list ──
+        # Skip metadata; replace FK _id cols with ref_table.name
+        skip_cols = {"id", "updated_at", "deleted_at", "status"}
+        select_parts: List[str] = []
+        seen_refs: set = set()
+
+        col_match = re.search(r"COLUMNS:\s*(.*)", schema)
+        if col_match:
+            for part in col_match.group(1).split("|"):
+                col = part.strip().split(":", 1)[0].strip()
+                if not col or col in skip_cols:
+                    continue
+                if col in fk_map:
+                    ref_table = fk_map[col]
+                    if ref_table not in seen_refs:
+                        select_parts.append(f"{ref_table}.name AS {ref_table}_name")
+                        seen_refs.add(ref_table)
+                    # Don't also select the raw _id
+                else:
+                    select_parts.append(f"{primary_table}.{col}")
+
+        select_cols = ", ".join(select_parts[:10]) if select_parts else f"{primary_table}.*"
+        joins_sql = " ".join(join_clauses)
         where = " AND ".join(clauses) if clauses else "1=1"
-        sql   = (
-            f"SELECT * FROM {primary_table} "
-            f"WHERE {where} "
+
+        sql = (
+            f"SELECT {select_cols} "
+            f"FROM {primary_table} "
+            + (f"{joins_sql} " if joins_sql else "")
+            + f"WHERE {where} "
             f"ORDER BY {primary_table}.created_at DESC LIMIT 10"
         )
         return {"table_name": primary_table, "sql": sql}
