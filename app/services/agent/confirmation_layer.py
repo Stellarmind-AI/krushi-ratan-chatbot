@@ -739,7 +739,151 @@ class ConfirmationLayer:
 
         logger.info("✅ ConfirmationLayer: no ambiguity — proceeding")
         return None
-
+    
+    def classify_navigation_intent(self, user_query: str) -> Optional[str]:
+        """
+        For NAVIGATION flow queries, detect the specific intent category.
+        
+        Returns one of:
+            - "crop_buy_nav"      → buying crops from farmers (Company role)
+            - "crop_sell_nav"     → selling crops as farmer
+            - "crop_price_nav"    → navigation on HOW TO CHECK prices
+            - "kshop_buy_nav"     → buying from K-Shop (tools/equipment)
+            - None                → unclear intent, let route agent + LLM decide
+        """
+        
+        q = user_query.lower()
+        
+        # ─────────────────────────────────────────────────────────────
+        # CROP BUY Intent
+        # ─────────────────────────────────────────────────────────────
+        _CROP_BUY_SIGNALS = [
+            # English
+            "buy crop", "purchase crop", "buy crops", "purchase crops",
+            "i want to buy crop", "i want to buy crops", "i want to buy",
+            "how to buy crop", "how to purchase crop",
+            "buy from farmer", "purchase from farmer", "company crop",
+            "company buy crop", "company purchase crop",
+            
+            # Romanized Gujarati
+            "pak kharidu", "pako kharidu", "crop kharidu", "crops kharidu",
+            "pak kharida chhe", "pako kharida chhe",
+            "pase thi kharidu", "farmer thi kharidu", "farmerthi kharidu",
+            "mane pak kharidu chhe", "mare pak kharida chhe",
+            "kharidi karvu crop", "company crop buy", "company role buy",
+            "crop kevi rite kharidu", "pak kevi rite kharidu",
+            
+            # Gujarati script
+            "પાક ખરીડવું", "પાક ખરીદો", "પાક ખરીદવો", "પાક ખરીદવી",
+            "પાકો ખરીડવું", "પાકો ખરીદો",
+            "ખેડૂત પાસેથી ખરીડો", "ખેડૂત પાસે ખરીડો",
+            "મારે પાક ખરીદવો છે", "મારે પાક ખરીડવું છે",
+            "માર પાક ખરીદવો છે", "માર પાક ખરીડવું છે",
+            "કંપની ભૂમિકા ખરીદ", "કંપનીમાં પાક ખરીદ",
+            "કંપની પાક ખરીદે",
+        ]
+        
+        _CROP_BUY_ANTI_SIGNALS = [
+            "sell", "vechuv", "વેચ", "list for sale", "want to sell",
+            "farmer sell", "publish crop", "submit crop", "register crop",
+        ]
+        
+        has_crop_buy = any(sig in q for sig in _CROP_BUY_SIGNALS)
+        has_crop_sell = any(anti in q for anti in _CROP_BUY_ANTI_SIGNALS)
+        
+        if has_crop_buy and not has_crop_sell:
+            logger.info(f"✅ NAV INTENT | CROP_BUY detected | query={user_query[:60]!r}")
+            return "crop_buy_nav"
+        
+        # ─────────────────────────────────────────────────────────────
+        # CROP SELL Intent
+        # ─────────────────────────────────────────────────────────────
+        _CROP_SELL_SIGNALS = [
+            # English
+            "sell crop", "sell crops", "how to sell crop", "how to sell",
+            "list crop", "list for sale", "register crop", "publish crop",
+            "farmer sell", "submit crop", "put crop", "post crop",
+            
+            # Romanized Gujarati
+            "pak vechuv", "pako vechuv", "vechuv kevi rite", "crop vechuv",
+            "maro pak vechuv", "mare pak vechuv", "farmer vechuv",
+            "crop list", "pak submit", "pak register", "pak publish",
+            "vechuv kevi rite", "pak kevi rite vechuv",
+            
+            # Gujarati script
+            "પાક વેચવું", "પાક વેચો", "પાક લિસ્ટ", "પાક રજિસ્ટર",
+            "ખેડૂત વેચે", "મારો પાક વેચવો", "મારો પાક વેચવું",
+            "પાક સબમિટ", "પાક પબ્લિશ",
+        ]
+        
+        has_crop_sell = any(sig in q for sig in _CROP_SELL_SIGNALS)
+        
+        if has_crop_sell:
+            logger.info(f"✅ NAV INTENT | CROP_SELL detected | query={user_query[:60]!r}")
+            return "crop_sell_nav"
+        
+        # ─────────────────────────────────────────────────────────────
+        # K-SHOP Intent
+        # ─────────────────────────────────────────────────────────────
+        _KSHOP_SIGNALS = [
+            # English
+            "kshop", "k-shop", "krushi store", "store buy",
+            "buy tool", "buy equipment", "buy seed", "buy fertilizer",
+            "buy supply", "buy sprayer", "buy spray", "buy pump",
+            "equipment from shop", "tool price", "equipment price",
+            
+            # Romanized Gujarati
+            "kshop thi", "krushi store", "tool kharidu", "bij kharidu",
+            "jar kharidu", "khad kharidu", "spray kharidu", "equipment",
+            "kshop product", "store ma", "store thi",
+            
+            # Gujarati script
+            "કેશોપ", "ક્રૃષિ સ્ટોર", "સાધન ખરીદો", "બીજ ખરીદો",
+            "જર ખરીદો", "ખાદ ખરીદો", "સ્પ્રે ખરીદો",
+            "સ્ટોર માંથી", "સાધનનો ભાવ", "સાધન કીમત",
+        ]
+        
+        _KSHOP_ANTI_SIGNALS = [
+            "wheat", "cotton", "rice", "corn", "ginger", "onion", "potato",
+            "ગહું", "કપાસ", "ચોખા", "આદુ", "કાંદો", "બટાકા",
+            "ghau", "kapas", "mais", "adhu", "kando", "bataka",
+            "crop", "pak", "pako", "agricultural produce",
+        ]
+        
+        has_kshop = any(sig in q for sig in _KSHOP_SIGNALS)
+        has_crop = any(sig in q for sig in _KSHOP_ANTI_SIGNALS)
+        
+        if has_kshop and not has_crop:
+            logger.info(f"✅ NAV INTENT | KSHOP_BUY detected | query={user_query[:60]!r}")
+            return "kshop_buy_nav"
+        
+        # ─────────────────────────────────────────────────────────────
+        # CROP PRICE Check (Navigation)
+        # ─────────────────────────────────────────────────────────────
+        _CROP_PRICE_NAV_SIGNALS = [
+            # English
+            "how to check price", "how to see price", "check crop price",
+            "yard price", "mandi price", "bhav check kevi rite",
+            
+            # Romanized Gujarati
+            "bhav check", "price check", "bhav kevi rite jovu",
+            "mandi bhav check", "yard bhav",
+            
+            # Gujarati script
+            "ભાવ ચેક કેવી રીતે", "ક્રોપ ભાવ જોવો",
+            "યાર્ડ ભાવ કેવી રીતે", "મંડી ભાવ કેવી રીતે",
+        ]
+        
+        has_crop_price_nav = any(sig in q for sig in _CROP_PRICE_NAV_SIGNALS)
+        
+        if has_crop_price_nav:
+            logger.info(f"✅ NAV INTENT | CROP_PRICE_NAV detected | query={user_query[:60]!r}")
+            return "crop_price_nav"
+        
+        # No clear intent detected
+        logger.info(f"⚠️ NAV INTENT | Unclear intent, letting LLM/route agent decide | query={user_query[:60]!r}")
+        return None
+    
     # ── Helpers ───────────────────────────────────────────────────────────
 
     @staticmethod

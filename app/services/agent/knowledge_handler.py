@@ -262,7 +262,7 @@ class KnowledgeHandler:
     # Public answer methods
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def answer_navigation(self, question: str) -> str:
+    async def answer_navigation(self, question: str, filtered_flow_ids: Optional[List[str]] = None) -> str:
         """
         Answer a NAVIGATION question using navigation.json.
 
@@ -294,6 +294,24 @@ class KnowledgeHandler:
         # Build full context with ALL navigation entries
         context = self._format_nav_context(self._nav_flows)
         logger.info(f"NAV: sending all {len(self._nav_flows)} entries to single LLM call ({len(context)} chars)")
+
+        # NEW: Filter flows if specific intent was detected
+        if filtered_flow_ids:
+            flows_to_use = [
+                flow for flow in self._nav_flows
+                if flow.get("id") in filtered_flow_ids
+            ]
+            logger.info(f"📋 FILTERED FLOWS | using {len(flows_to_use)} / {len(self._nav_flows)} flows")
+            
+            if not flows_to_use:
+                logger.warning(f"⚠️ No flows matched filtered_flow_ids={filtered_flow_ids}, falling back to all")
+                flows_to_use = self._nav_flows
+        else:
+            flows_to_use = self._nav_flows
+            logger.info(f"📋 USING ALL FLOWS | {len(flows_to_use)} flows available")
+        
+        # Use filtered flows for context instead of all flows
+        context = self._format_nav_context(flows_to_use)
 
         system = (
             "You are a navigation assistant for the Krushi Ratn agricultural app.\n"

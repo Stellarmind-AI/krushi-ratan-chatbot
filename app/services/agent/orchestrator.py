@@ -20,6 +20,7 @@ import re
 import time
 from typing import List, Dict, Any, Optional
 
+from app.services.agent.confirmation_layer import get_confirmation_layer
 from app.services.agent.route_agent    import get_route_agent, FlowType
 from app.services.agent.query_cache    import get_query_cache, STRIP_WORDS
 from app.services.knowledge_cache      import BROWSE_KEYWORDS
@@ -96,6 +97,7 @@ class Orchestrator:
         self.query_executor    = get_query_executor()
         self.llm_manager       = get_llm_manager()
         self.privacy_policy    = get_privacy_policy()
+        self.confirmation_layer = get_confirmation_layer()
 
         # Schema data
         self.condensed_schema: dict = {}
@@ -344,8 +346,50 @@ class Orchestrator:
 
     async def _flow_navigation(self, query: str) -> Dict[str, Any]:
         logger.step("FLOW / NAVIGATION", query[:60])
+        
+        # NEW: Detect navigation intent to determine flow category
+        nav_intent = self.confirmation_layer.classify_navigation_intent(query)
+        
+        # Map intent to relevant navigation flow IDs
+        filtered_flow_ids = None
+        
+        if nav_intent == "crop_buy_nav":
+            filtered_flow_ids = [
+                "nav_company_crop_buy_flow_sell_alias",
+                "nav_crop_price_determination",
+            ]
+            logger.info(f"🧭 NAVIGATION INTENT → crop_buy_nav | filtering to {len(filtered_flow_ids)} flows")
+            
+        elif nav_intent == "crop_sell_nav":
+            filtered_flow_ids = [
+                "nav_crop_sell",
+                "nav_crop_order_cancel",
+            ]
+            logger.info(f"🧭 NAVIGATION INTENT → crop_sell_nav | filtering to {len(filtered_flow_ids)} flows")
+            
+        elif nav_intent == "kshop_buy_nav":
+            filtered_flow_ids = [
+                "nav_kshop_buy_product",
+                "nav_kshop_view_order",
+                "nav_kshop_cancel_order",
+            ]
+            logger.info(f"🧭 NAVIGATION INTENT → kshop_buy_nav | filtering to {len(filtered_flow_ids)} flows")
+            
+        elif nav_intent == "crop_price_nav":
+            filtered_flow_ids = [
+                "nav_home_check_mandi_yard_prices",
+                "nav_yard_price_my_taluka",
+            ]
+            logger.info(f"🧭 NAVIGATION INTENT → crop_price_nav | filtering to {len(filtered_flow_ids)} flows")
+            
+        else:
+            logger.info(f"🧭 NAVIGATION INTENT → unclear, using all flows")
+            filtered_flow_ids = None
+        
+        # Pass filtered_flow_ids to Knowledge Handler
         with Timer() as t:
-            answer = await self.knowledge_handler.answer_navigation(query)
+            answer = await self.knowledge_handler.answer_navigation(query, filtered_flow_ids=filtered_flow_ids)
+        
         logger.step_done("FLOW / NAVIGATION", t.elapsed_ms, answer_chars=len(answer))
         logger.final_answer(answer, lang="en")
         return {
