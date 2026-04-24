@@ -172,14 +172,13 @@ SOFT_DELETE_TABLES = {
     "users","video_categories","video_comments","video_posts","weights","yards",
 }
 
+# kshop_products is the ONLY table where the SQL layer adds a status = 1 filter.
+# All other tables' status handling is done by the post-retrieval status_filter
+# layer — NOT in SQL. Adding status conditions in SQL for other tables silently
+# drops rows with valid non-'active' states (e.g. buy_sell 'sold_out') that the
+# user may legitimately want to see. This aligns with orchestrator Rule #12.
 STATUS_NOTES = {
-    "kshop_products":   "Active only: WHERE status = 1 AND deleted_at IS NULL",
-    "buy_sell_products":"Active only: WHERE status = 'active' AND deleted_at IS NULL",
-    "video_posts":      "Published only: WHERE status = 1 AND deleted_at IS NULL",
-    "kshop_companies":  "Active only: WHERE status = 1 AND deleted_at IS NULL",
-    "kshop_categories": "Active only: WHERE status = 1 AND deleted_at IS NULL",
-    "sub_categories":   "Active only: WHERE status = 1 AND deleted_at IS NULL",
-    "users":            "Active only: WHERE status = 1 AND deleted_at IS NULL",
+    "kshop_products": "Active only: WHERE kshop_products.status = 1 AND kshop_products.deleted_at IS NULL",
 }
 
 TABLE_CONTEXTS = {
@@ -376,23 +375,25 @@ class SchemaGenerator:
     def _build_example_queries(self, table_name: str, safe_columns: Optional[List[str]] = None) -> List[str]:
         examples = {
             "kshop_products": [
-                "SELECT kp.name, kp.price, kp.discount_price, kco.name AS company, COALESCE(kc.name,'N/A') AS category "
+                "SELECT kp.id, kp.name, kp.price, kp.discount_price, kco.name AS company, kc.name AS category "
                 "FROM kshop_products kp "
                 "JOIN kshop_companies kco ON kp.kshop_company_id = kco.id "
                 "LEFT JOIN kshop_categories kc ON kp.kshop_category_id = kc.id AND kc.deleted_at IS NULL "
                 "LEFT JOIN kshop_weights kw ON kp.kshop_weight_id = kw.id "
                 "WHERE kp.deleted_at IS NULL AND kp.status = 1 "
-                "AND (kp.name LIKE '%balwan%' OR kp.name LIKE '%બલવાન%') "
-                "AND (kp.name LIKE '%weeder%' OR kp.name LIKE '%વીડર%') "
+                "AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE name LIKE '%weeder%' OR name LIKE '%વીડર%' AND deleted_at IS NULL) "
                 "ORDER BY kp.updated_at DESC LIMIT 50",
             ],
             "buy_sell_products": [
-                "SELECT bp.product_name, bp.price, bp.quantity_available, bc.name AS category, u.name AS seller "
+                # NOTE: No status = 'active' filter here — per SQL generation Rule #12,
+                # status filtering is handled by the post-retrieval status_filter layer.
+                # Adding it in SQL would silently exclude 'sold_out' and other valid states.
+                "SELECT bp.id, bp.product_name, bp.price, bp.quantity_available, bc.name AS category, u.name AS seller "
                 "FROM buy_sell_products bp "
                 "LEFT JOIN buy_sell_categories bc ON bp.category_id = bc.id AND bc.deleted_at IS NULL "
                 "LEFT JOIN users u ON bp.seller_id = u.id "
-                "WHERE bp.deleted_at IS NULL AND bp.status = 'active' "
-                "AND (bp.product_name LIKE '%tractor%' OR bp.product_name LIKE '%ટ્રેક્ટર%') "
+                "WHERE bp.deleted_at IS NULL "
+                "AND bp.category_id IN (SELECT id FROM buy_sell_categories WHERE name LIKE '%tractor%' OR name LIKE '%ટ્રેક્ટર%' AND deleted_at IS NULL) "
                 "ORDER BY bp.created_at DESC LIMIT 50",
             ],
             "products": [

@@ -642,6 +642,27 @@ class Orchestrator:
 
         compact_schema = "\n".join(schema_lines)
 
+        # Inject example queries for buy_sell_products and kshop_products so the
+        # LLM has a concrete reference for the category-subquery pattern.
+        # These examples are stored in the tool JSON but NOT in _compiled_schemas.
+        _CATEGORY_FILTER_TABLES = {"buy_sell_products", "kshop_products"}
+        example_lines: List[str] = []
+        for tool_name in selected_tools:
+            table = tool_name.replace("query_", "")
+            if table not in _CATEGORY_FILTER_TABLES:
+                continue
+            try:
+                tool_json = self.schema_generator.load_tool(table)
+                examples = tool_json.get("example_queries", [])
+                if examples:
+                    example_lines.append(f"\nEXAMPLE QUERY for {table} (use category subquery — DO NOT deviate):")
+                    for ex in examples[:1]:   # one example is enough
+                        example_lines.append(f"  {ex}")
+            except Exception:
+                pass
+        if example_lines:
+            compact_schema += "\n" + "\n".join(example_lines) + "\n"
+
         # Build keyword hint block.
         #
         # Two paths:
@@ -676,7 +697,12 @@ class Orchestrator:
                 lines.append(f"  '{matched}' → {variants}")
                 lines.append(f"    SQL form: {variants_sql}")
             lines.append(
-                "  Rules: apply these LIKE variants to the relevant name/title/product column."
+                "  Rules: apply these LIKE variants as follows:\n"
+                "    • For buy_sell_products: filter via category subquery — "
+                "bp.category_id IN (SELECT id FROM buy_sell_categories WHERE name LIKE '%variant%' OR ... AND deleted_at IS NULL)\n"
+                "    • For kshop_products: filter via category subquery — "
+                "kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE name LIKE '%variant%' OR ... AND deleted_at IS NULL)\n"
+                "    • For all other tables (news, video_posts, etc.): apply LIKE to the relevant name/title column directly."
             )
             lines.append(
                 "  Do NOT translate keywords into Hindi, Marathi, or any other script — "
@@ -696,12 +722,13 @@ TABLES:
 
 RULES:
 0. SQL FORMATTING — CRITICAL (BOTH RULES MANDATORY):
-   a) BACKSLASH PROHIBITION — Write SQL on standard lines ONLY:
-      • NEVER use backslash (\\) for line continuation — this breaks MySQL execution
-      • INCORRECT: SELECT col \\\n FROM table (backslash at end of line)
-      • CORRECT:   SELECT col\n FROM table (use real newlines only)
-      • If SQL is long, use actual newlines (\n in your response) NOT backslash continuation
-      • Even if your training suggests backslash for line breaks, MySQL does NOT support it
+   a) SINGLE-LINE SQL — The entire SQL value MUST be ONE continuous string:
+      • Write ALL clauses on a single line separated by spaces (SELECT ... FROM ... WHERE ...)
+      • NEVER put a literal newline inside a JSON string value — it makes JSON invalid
+      • NEVER use backslash (\\\\) at end of line — not valid in JSON or MySQL
+      • NEVER use + to concatenate SQL string pieces — not valid JSON
+      • INCORRECT: "sql": "SELECT col\\\\\n  FROM t"  or  "SELECT col " + "FROM t"
+      • CORRECT:   "sql": "SELECT p.id, p.name FROM products p JOIN sub_categories sc ON p.subcategory_id = sc.id WHERE p.deleted_at IS NULL"
    b) TABLE QUALIFICATION — ALWAYS prefix SELECT columns with table name or alias:
       • When query has JOINs, EVERY column in SELECT must include its table name or alias
       • INCORRECT: SELECT id, title, description FROM news JOIN states ... (bare column names)
@@ -793,6 +820,35 @@ RULES:
     must include: products JOIN yards ON ... LEFT JOIN cities ON yards.city_id = cities.id
     LEFT JOIN talukas ON yards.taluka_id = talukas.id. Apply this chaining for ALL tables
     — always follow the full FK path shown in the JOINS block of each table.
+
+12. CATEGORY-BASED FILTERING — MANDATORY FOR buy_sell_products AND kshop_products:
+    NEVER filter by buy_sell_products.product_name or kshop_products.name with LIKE.
+    These product name columns are user-entered text and DO NOT reliably contain keywords.
+    Instead, ALWAYS use a category subquery to match the keyword:
+
+    For buy_sell_products:
+      bp.category_id IN (
+        SELECT id FROM buy_sell_categories
+        WHERE (name LIKE '%keyword%' OR name LIKE '%gujarati_variant%')
+        AND deleted_at IS NULL
+      )
+
+    For kshop_products:
+      kp.kshop_category_id IN (
+        SELECT id FROM kshop_categories
+        WHERE (name LIKE '%keyword%' OR name LIKE '%gujarati_variant%')
+        AND deleted_at IS NULL
+      )
+
+    Apply all keyword variants from KEYWORD SEARCH VARIANTS section inside the subquery WHERE.
+    This rule is ABSOLUTE — no exceptions for buy_sell_products and kshop_products.
+    Examples:
+      User: "tractor in buy sell" →
+        WHERE bp.deleted_at IS NULL
+        AND bp.category_id IN (SELECT id FROM buy_sell_categories WHERE (name LIKE '%tractor%' OR name LIKE '%ટ્રેક્ટર%') AND deleted_at IS NULL)
+      User: "weeder in kshop" →
+        WHERE kp.deleted_at IS NULL AND kp.status = 1
+        AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE (name LIKE '%weeder%' OR name LIKE '%વીડર%' OR name LIKE '%power weeder%') AND deleted_at IS NULL)
 
 OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
 [{{"table_name": "primary_table", "sql": "SELECT ... FROM ... WHERE ..."}}]"""

@@ -29,6 +29,12 @@ class JSONParser:
         Raises:
             ValueError: If all parsing strategies fail
         """
+        # Strategy 0: Fix string concatenation (LLM sometimes uses + operators)
+        try:
+            text = JSONParser._fix_string_concatenation(text)
+        except Exception:
+            pass
+        
         # Strategy 1: Direct JSON parse
         try:
             result = json.loads(text)
@@ -98,6 +104,39 @@ class JSONParser:
                         continue
         
         return None
+    
+    @staticmethod
+    def _fix_string_concatenation(text: str) -> str:
+        """
+        Fix LLM responses that use string concatenation operators (+ or newline continuation).
+        Pattern: "string1" \n + "string2" or "string1" + \n "string2"
+        
+        This happens when LLMs format SQL as if it were code (JavaScript/Python style).
+        Converts to proper JSON with single concatenated string.
+        
+        Example input:
+            "sql": "SELECT col " + "FROM table"
+        
+        Example output:
+            "sql": "SELECT col FROM table"
+        """
+        # Pattern 1: "string" + "string" across any whitespace
+        # Match: closing quote, optional whitespace, +, optional whitespace, opening quote
+        result = text
+        
+        # Fix pattern: "..." + "..." or "...\n +" or "+ "..."
+        # Remove + operators between quoted strings and join them
+        result = re.sub(r'"\s*\+\s*"', ' ', result)
+        
+        # Pattern 2: Handle cases where the + is on next line (with \ continuation)
+        # "string" \
+        # + "string2"
+        result = re.sub(r'\\\s*\+\s*', ' ', result)
+        
+        # Pattern 3: Clean up any escaped newlines that might still be there
+        result = re.sub(r'\\n\s*(?=\+|")', ' ', result)
+        
+        return result
     
     @staticmethod
     def _regex_extract(text: str) -> Optional[Any]:
@@ -318,6 +357,11 @@ class SQLSanitizer:
         
         sql = sql.strip()
         
+        # Remove any remaining string concatenation operators (+ signs between quoted strings)
+        # This handles edge cases where JSON preprocessing didn't catch them
+        sql = re.sub(r'"\s*\+\s*"', ' ', sql)
+        sql = re.sub(r"'\s*\+\s*'", ' ', sql)
+        
         # Remove line continuation backslashes
         sql = re.sub(r'\\\s*\n', ' ', sql)
         
@@ -341,6 +385,23 @@ class SQLSanitizer:
         
         # Clean up edges
         sql = sql.strip().rstrip(';').strip()
+
+        # ── DEFENSIVE: Strip JSON-artifact suffix ──────────────────────────────
+        # When the LLM puts literal newlines inside a JSON string, json.loads
+        # fails and the regex fallback grabs SQL + JSON closing characters
+        # (e.g. ...%') ORDER BY id DESC" } ' ).  Detect and strip that suffix.
+        #
+        # Pattern: closing-quote (single or double) + optional whitespace + } or ]
+        # We build the character class via concatenation to avoid raw-string
+        # delimiter conflicts — no backslash tricks needed.
+        import re as _re
+        _json_artifact_re = _re.compile(r"""["']\s*[}\]]""")  # noqa: W605
+        json_suffix = _json_artifact_re.search(sql)
+        if json_suffix:
+            sql = sql[:json_suffix.start()].strip()
+        # Strip any stray trailing quote / brace / bracket / whitespace
+        _junk_chars = '"' + "'" + '\n\r }])'
+        sql = sql.rstrip(_junk_chars).strip()
         
         # Fix missing table prefixes in SELECT when JOINs present
         sql = SQLSanitizer._fix_missing_table_prefixes(sql)
