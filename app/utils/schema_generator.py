@@ -375,7 +375,7 @@ class SchemaGenerator:
     def _build_example_queries(self, table_name: str, safe_columns: Optional[List[str]] = None) -> List[str]:
         examples = {
             "kshop_products": [
-                "SELECT kp.id, kp.name, kp.price, kp.discount_price, kco.name AS company, kc.name AS category "
+                "SELECT kp.id, kp.name, kp.price, kp.discount_price, kco.name AS company, kc.name AS category, kc.img AS category_img "
                 "FROM kshop_products kp "
                 "JOIN kshop_companies kco ON kp.kshop_company_id = kco.id "
                 "LEFT JOIN kshop_categories kc ON kp.kshop_category_id = kc.id AND kc.deleted_at IS NULL "
@@ -388,7 +388,7 @@ class SchemaGenerator:
                 # NOTE: No status = 'active' filter here — per SQL generation Rule #12,
                 # status filtering is handled by the post-retrieval status_filter layer.
                 # Adding it in SQL would silently exclude 'sold_out' and other valid states.
-                "SELECT bp.id, bp.product_name, bp.price, bp.quantity_available, bc.name AS category, u.name AS seller "
+                "SELECT bp.id, bp.product_name, bp.price, bp.quantity_available, bp.images, bc.name AS category, bc.image AS category_image, u.name AS seller "
                 "FROM buy_sell_products bp "
                 "LEFT JOIN buy_sell_categories bc ON bp.category_id = bc.id AND bc.deleted_at IS NULL "
                 "LEFT JOIN users u ON bp.seller_id = u.id "
@@ -397,7 +397,7 @@ class SchemaGenerator:
                 "ORDER BY bp.created_at DESC LIMIT 50",
             ],
             "products": [
-                "SELECT sc.name AS crop, p.min_price, p.max_price, p.price_date, y.name AS yard, c.name AS city "
+                "SELECT sc.name AS crop, sc.img AS crop_img, p.min_price, p.max_price, p.price_date, y.name AS yard, c.name AS city "
                 "FROM products p "
                 "JOIN sub_categories sc ON p.subcategory_id = sc.id "
                 "JOIN yards y ON p.yard_id = y.id "

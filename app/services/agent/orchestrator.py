@@ -147,6 +147,9 @@ class Orchestrator:
 
             # Build explicit SQL JOIN clauses from each relationship.
             # "references" is of the form "<ref_table>.<ref_col>".
+            # We also annotate each JOIN line with any img/image/images columns
+            # present in the referenced table so the LLM knows deterministically
+            # which image columns are available on each JOIN target — no guessing.
             rels = tool.get("relationships", [])
             join_lines: List[str] = []
             for r in rels:
@@ -156,8 +159,18 @@ class Orchestrator:
                     continue
                 ref_table, ref_col = ref.split(".", 1)
                 join_kw = r.get("join_type", "JOIN")
+                # Look up image columns on the referenced table
+                ref_tool = (self.all_tools or {}).get(ref_table, {})
+                ref_img_cols = [
+                    c["name"] for c in ref_tool.get("columns", [])
+                    if c["name"] in ("img", "image", "images")
+                ]
+                img_note = (
+                    f"  -- img cols: {', '.join(ref_img_cols)}"
+                    if ref_img_cols else ""
+                )
                 join_lines.append(
-                    f"    {join_kw} {ref_table} ON {tname}.{col} = {ref_table}.{ref_col}"
+                    f"    {join_kw} {ref_table} ON {tname}.{col} = {ref_table}.{ref_col}{img_note}"
                 )
             joins_block = "\n".join(join_lines) if join_lines else "    (no foreign keys)"
 
@@ -642,14 +655,15 @@ class Orchestrator:
 
         compact_schema = "\n".join(schema_lines)
 
-        # Inject example queries for buy_sell_products and kshop_products so the
-        # LLM has a concrete reference for the category-subquery pattern.
+        # Inject example queries for specific tables so the LLM has a concrete
+        # reference for both category-subquery filtering and correct img column usage.
         # These examples are stored in the tool JSON but NOT in _compiled_schemas.
-        _CATEGORY_FILTER_TABLES = {"buy_sell_products", "kshop_products"}
+        # "products" is included here so the LLM sees sc.img AS crop_img in context.
+        _TABLES_WITH_INJECTED_EXAMPLES = {"buy_sell_products", "kshop_products", "products"}
         example_lines: List[str] = []
         for tool_name in selected_tools:
             table = tool_name.replace("query_", "")
-            if table not in _CATEGORY_FILTER_TABLES:
+            if table not in _TABLES_WITH_INJECTED_EXAMPLES:
                 continue
             try:
                 tool_json = self.schema_generator.load_tool(table)
@@ -849,6 +863,38 @@ RULES:
       User: "weeder in kshop" →
         WHERE kp.deleted_at IS NULL AND kp.status = 1
         AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE (name LIKE '%weeder%' OR name LIKE '%વીડર%' OR name LIKE '%power weeder%') AND deleted_at IS NULL)
+
+13. IMAGE COLUMNS — ALWAYS INCLUDE IN SELECT:
+    For every table (primary or JOINed) whose COLUMNS list includes a column named
+    exactly `img`, `image`, or `images`, you MUST include that column in the SELECT.
+    Use the table alias if one is used in the query.
+    Rules:
+      a) Primary table has `img`/`image`/`images` → include as `alias.img` or `alias.image` or `alias.images`
+      b) JOINed table has `img`/`image` → include as `joined_alias.img AS <joined_table>_img`
+         Example: sub_categories aliased as `sc` has `img` → SELECT sc.img AS crop_img
+         Example: kshop_categories aliased as `kc` has `img` → SELECT kc.img AS category_img
+         Example: buy_sell_categories aliased as `bc` has `image` → SELECT bc.image AS category_image
+      c) buy_sell_products has `images` (JSON array of product photos) → always include as `bp.images`
+    This rule is MANDATORY — never omit img/image/images columns when they exist in the COLUMNS block.
+    Do NOT rename these columns arbitrarily — use the aliases shown above.
+
+13. IMAGE COLUMNS — MANDATORY INCLUSION:
+    The JOINS block above annotates lines with "-- img cols: X" wherever the
+    referenced table has an img/image/images column.  For EVERY such annotation,
+    you MUST include that column in the SELECT list using the table alias.
+    Naming convention:
+      alias.img       AS  <joined_table_short>_img      (e.g. sc.img  AS crop_img)
+      alias.image     AS  <joined_table_short>_image    (e.g. bc.image AS category_image)
+      alias.images    → include as-is (e.g. bp.images)
+    Also include img/image/images from the PRIMARY table itself when present.
+    Examples:
+      products JOIN sub_categories (-- img cols: img)  →  SELECT sc.img AS crop_img
+      buy_sell_products LEFT JOIN buy_sell_categories (-- img cols: image)  →  SELECT bc.image AS category_image
+      buy_sell_products has images column  →  SELECT bp.images
+      kshop_products LEFT JOIN kshop_categories (-- img cols: img)  →  SELECT kc.img AS category_img
+      kshop_products JOIN kshop_companies (-- img cols: img)  →  SELECT kco.img AS company_img
+    This rule is MANDATORY — never omit an img/image/images column when the JOIN
+    annotation signals it exists.  The frontend requires these columns to display images.
 
 OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
 [{{"table_name": "primary_table", "sql": "SELECT ... FROM ... WHERE ..."}}]"""

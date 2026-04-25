@@ -113,12 +113,35 @@ class QueryValidator:
 
     @staticmethod
     def _validate_privacy(query: str) -> Tuple[bool, str]:
-        """Validate table and column access against the schema privacy policy."""
+        """Validate table and column access against the schema privacy policy.
+
+        Dispatch order:
+          1. sqlglot path — full AST validation (preferred for accuracy).
+          2. regex fallback — used when sqlglot is not installed OR when
+             sqlglot.parse_one raises a parse exception (e.g. queries whose
+             LIKE literals contain Gujarati / other Unicode multi-byte sequences
+             that confuse sqlglot's MySQL lexer).  The regex path is always
+             sufficient for the privacy checks we need.
+
+        A structurally valid query is NEVER rejected solely because sqlglot
+        cannot tokenise its Unicode string literals.
+        """
         if QueryValidator._has_select_star(query):
             return False, "SELECT * and table.* are not allowed"
 
         if sqlglot is not None and exp is not None:
-            return QueryValidator._validate_privacy_with_sqlglot(query)
+            ok, err = QueryValidator._validate_privacy_with_sqlglot(query)
+            # If sqlglot could not parse the SQL at all (parse exception),
+            # fall through to the regex fallback instead of rejecting a valid
+            # query. Hard policy violations (blocked column, join_only table)
+            # do NOT start with this prefix and are returned immediately.
+            if not ok and err.startswith("Unable to parse SQL safely"):
+                logger.debug(
+                    "sqlglot parse failed, falling back to regex validator",
+                )
+                return QueryValidator._validate_privacy_fallback(query)
+            return ok, err
+
         return QueryValidator._validate_privacy_fallback(query)
 
     @staticmethod
