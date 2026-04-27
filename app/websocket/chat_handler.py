@@ -25,7 +25,7 @@ from app.models.chat_models import ChatHistory, ChatMessage
 from app.services.agent.orchestrator import get_orchestrator
 from app.services.language_processor import get_language_processor
 from app.services.translation_service import translate_to_user_language, translate_list_to_user_language
-from app.services.agent.confirmation_layer import get_confirmation_layer, ConfirmedIntent, _is_navigation_query
+from app.services.agent.confirmation_layer import get_confirmation_layer, ConfirmedIntent
 
 logger       = get_websocket_logger()
 pipeline_log = get_logger("pipeline")
@@ -212,7 +212,7 @@ class ChatHandler:
         #   None                 → no ambiguity, proceed normally
         _sql_enabled = settings.is_sql_enabled
         if not confirmed_intent and _sql_enabled:
-            f1_result = self.confirmation_layer.check(processed_text)
+            f1_result = await self.confirmation_layer.check(processed_text)
 
             if isinstance(f1_result, ConfirmedIntent):
                 # High-confidence intent — skip F1 UI, inject directly into pipeline
@@ -252,18 +252,11 @@ class ChatHandler:
                 await ws.send_text(json.dumps(payload, ensure_ascii=False))
                 return  # ← pipeline paused; resumes via _handle_clarification_response
 
-        # ── Detect navigation signal for route override ────────────────────
-        # F1 nav bypass catches navigation patterns (કેવી રીતે, પગલાં, steps, etc.)
-        # but only prevents F1 from injecting confirmed_intent — it does NOT
-        # tell the route agent anything. The route agent can still mis-classify
-        # as SQL (e.g. "મારા ઓર્ડર ક્યાં છે?" sounds like order data lookup).
-        # Fix: when F1 detects nav signals, force NAVIGATION flow in orchestrator.
+        # ── Navigation routing ───────────────────────────────────────────────
+        # The LLM-based F1 (confirmation_layer) already returns None (skip) for
+        # all navigation queries — the route agent then classifies them correctly
+        # as NAVIGATION without any keyword override needed here.
         force_navigation = False
-        if not confirmed_intent:
-            q_check = processed_text.lower() + " " + processed_text
-            if _is_navigation_query(q_check):
-                force_navigation = True
-                print(f"  🧭 NAV SIGNAL DETECTED — will force NAVIGATION flow", flush=True)
 
         # ── Step 2: Orchestrator → English answer ────────────────────────────
         with Timer() as t:

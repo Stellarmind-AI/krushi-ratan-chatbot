@@ -1109,16 +1109,23 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
                 line = line.strip()
                 if not line or line.startswith("(no"):
                     continue
+                # Strip any inline SQL comment before using the line in actual SQL.
+                # _build_compiled_schemas appends "  -- img cols: X" annotations to
+                # JOIN lines so the LLM can see which joined tables have image columns.
+                # Those annotations are LLM-context-only — they must never reach the
+                # SQL executor because MySQL treats "-- " as a line comment, which
+                # would comment out everything after it (including WHERE and ORDER BY).
+                clean_line = re.sub(r'\s*--.*$', '', line).strip()
                 # Extract: "LEFT JOIN yards ON products.yard_id = yards.id"
                 m = re.match(
                     r"((?:LEFT\s+)?JOIN)\s+(\w+)\s+ON\s+\w+\.(\w+)\s*=\s*\w+\.\w+",
-                    line, re.IGNORECASE,
+                    clean_line, re.IGNORECASE,
                 )
                 if m:
                     ref_table = m.group(2)
                     fk_col = m.group(3)       # e.g. "yard_id"
                     fk_map[fk_col] = ref_table
-                    join_clauses.append(line)
+                    join_clauses.append(clean_line)  # always use comment-stripped line
 
         # ── Parse COLUMNS → build SELECT list ──
         # Skip metadata; replace FK _id cols with ref_table.name
