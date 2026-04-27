@@ -42,26 +42,20 @@ VERIFIED_FK_MAP: Dict[str, List[Dict]] = {
     ],
     "buy_sell_orders": [
         {"column": "product_id", "references": "buy_sell_products.id", "join_type": "JOIN",      "description": "Product being ordered"},
-        {"column": "buyer_id",   "references": "users.id",             "join_type": "LEFT JOIN", "description": "User who is buying"},
-        {"column": "seller_id",  "references": "users.id",             "join_type": "LEFT JOIN", "description": "User who is selling"},
     ],
     "buy_sell_products": [
         {"column": "category_id", "references": "buy_sell_categories.id", "join_type": "LEFT JOIN", "description": "Product category"},
-        {"column": "seller_id",   "references": "users.id",               "join_type": "LEFT JOIN", "description": "Farmer/user selling this product"},
     ],
     "cities": [
         {"column": "state_id", "references": "states.id", "join_type": "LEFT JOIN", "description": "State this city belongs to"},
     ],
     "company_orders": [
         {"column": "farmer_order_id", "references": "farmer_orders.id",  "join_type": "JOIN",      "description": "Related farmer order"},
-        {"column": "user_id",         "references": "users.id",          "join_type": "LEFT JOIN", "description": "User placing the order"},
-        {"column": "farmer_id",       "references": "users.id",          "join_type": "LEFT JOIN", "description": "Farmer in the order"},
         {"column": "order_status_id", "references": "order_statuses.id", "join_type": "LEFT JOIN", "description": "Current order status"},
         {"column": "subcategory_id",  "references": "sub_categories.id", "join_type": "LEFT JOIN", "description": "Product subcategory"},
         {"column": "weight_id",       "references": "weights.id",        "join_type": "LEFT JOIN", "description": "Weight unit"},
     ],
     "farmer_orders": [
-        {"column": "user_id",         "references": "users.id",           "join_type": "LEFT JOIN", "description": "Farmer placing the order"},
         {"column": "company_id",      "references": "kshop_companies.id", "join_type": "LEFT JOIN", "description": "Company receiving the order"},
         {"column": "order_status_id", "references": "order_statuses.id",  "join_type": "LEFT JOIN", "description": "Order status"},
         {"column": "subcategory_id",  "references": "sub_categories.id",  "join_type": "LEFT JOIN", "description": "Product subcategory"},
@@ -76,7 +70,6 @@ VERIFIED_FK_MAP: Dict[str, List[Dict]] = {
         {"column": "kshop_category_id", "references": "kshop_categories.id", "join_type": "LEFT JOIN", "description": "Product category"},
         {"column": "kshop_company_id",  "references": "kshop_companies.id",  "join_type": "LEFT JOIN", "description": "Company supplying product"},
         {"column": "order_status_id",   "references": "order_statuses.id",   "join_type": "LEFT JOIN", "description": "Order status"},
-        {"column": "user_id",           "references": "users.id",            "join_type": "LEFT JOIN", "description": "User who placed order"},
     ],
     "kshop_products": [
         {"column": "kshop_company_id",  "references": "kshop_companies.id",  "join_type": "JOIN",      "description": "Company that makes/sells this product (always set)"},
@@ -108,52 +101,34 @@ VERIFIED_FK_MAP: Dict[str, List[Dict]] = {
     ],
     "user_products": [
         {"column": "subcategory_id", "references": "sub_categories.id", "join_type": "LEFT JOIN", "description": "Product subcategory"},
-        {"column": "user_id",        "references": "users.id",           "join_type": "JOIN",      "description": "Owner farmer/user"},
     ],
     "user_subcategories": [
         {"column": "subcategory_id", "references": "sub_categories.id", "join_type": "LEFT JOIN", "description": "Preferred subcategory"},
-        {"column": "user_id",        "references": "users.id",           "join_type": "JOIN",      "description": "User"},
-    ],
-    "user_talukas": [
-        {"column": "user_id",   "references": "users.id",   "join_type": "JOIN", "description": "User"},
-        {"column": "taluka_id", "references": "talukas.id", "join_type": "JOIN", "description": "Taluka user belongs to"},
     ],
     "user_video_categories": [
-        {"column": "user_id",           "references": "users.id",            "join_type": "JOIN", "description": "User"},
         {"column": "video_category_id", "references": "video_categories.id", "join_type": "JOIN", "description": "Preferred video category"},
-    ],
-    "users": [
-        {"column": "state_id", "references": "states.id", "join_type": "LEFT JOIN", "description": "State of user"},
-        {"column": "city_id",  "references": "cities.id", "join_type": "LEFT JOIN", "description": "City of user"},
     ],
     "video_comment_likes": [
         {"column": "comment_id", "references": "video_comments.id", "join_type": "JOIN", "description": "Comment that was liked"},
-        {"column": "user_id",    "references": "users.id",          "join_type": "JOIN", "description": "User who liked"},
     ],
     "video_comments": [
         {"column": "video_post_id",     "references": "video_posts.id",    "join_type": "JOIN",      "description": "Video being commented on"},
-        {"column": "user_id",           "references": "users.id",          "join_type": "JOIN",      "description": "User who commented"},
         {"column": "parent_comment_id", "references": "video_comments.id", "join_type": "LEFT JOIN", "description": "Parent comment if reply (self-reference)"},
     ],
     "video_likes": [
         {"column": "video_post_id", "references": "video_posts.id", "join_type": "JOIN", "description": "Video that was liked"},
-        {"column": "user_id",       "references": "users.id",       "join_type": "JOIN", "description": "User who liked"},
     ],
     "video_posts": [
-        {"column": "user_id",           "references": "users.id",            "join_type": "JOIN",      "description": "User who posted video"},
         {"column": "video_category_id", "references": "video_categories.id", "join_type": "LEFT JOIN", "description": "Video category"},
     ],
     "video_saves": [
         {"column": "video_post_id", "references": "video_posts.id", "join_type": "JOIN", "description": "Saved video"},
-        {"column": "user_id",       "references": "users.id",       "join_type": "JOIN", "description": "User who saved"},
     ],
     "video_shares": [
         {"column": "video_post_id", "references": "video_posts.id", "join_type": "JOIN", "description": "Shared video"},
-        {"column": "user_id",       "references": "users.id",       "join_type": "JOIN", "description": "User who shared"},
     ],
     "video_views": [
         {"column": "video_post_id", "references": "video_posts.id", "join_type": "JOIN", "description": "Viewed video"},
-        {"column": "user_id",       "references": "users.id",       "join_type": "JOIN", "description": "User who viewed"},
     ],
     "yards": [
         {"column": "state_id",  "references": "states.id",  "join_type": "LEFT JOIN", "description": "State of this yard"},
@@ -182,14 +157,13 @@ STATUS_NOTES = {
 }
 
 TABLE_CONTEXTS = {
-    "users":                   "Farmer and user accounts — profile, contact, location. Referenced as user_id, seller_id, buyer_id, farmer_id",
     "buy_sell_categories":     "Categories for buy/sell marketplace (animals, equipment, crops). Referenced as category_id in buy_sell_products",
-    "buy_sell_products":       "Marketplace product listings by farmers — product_name, price, quantity, status='active'/'sold_out'. seller_id→users",
+    "buy_sell_products":       "Marketplace product listings by farmers — product_name, price, quantity, status='active'/'sold_out'.",
     "buy_sell_orders":         "Purchase transactions in buy/sell marketplace — buyer_id and seller_id both reference users",
     "buy_sell_category_fields":"Custom form fields per buy/sell product category",
     "buy_sell_category_steps": "Multi-step form wizard steps for buy/sell product listing",
     "categories":              "Main product categories — referenced by sub_categories",
-    "sub_categories":          "Sub-categories under main categories — referenced as subcategory_id in products, seeds, user_products",
+    "sub_categories":          "Sub-categories under main categories — referenced as subcategory_id in products, seeds",
     "products":                "Crop/commodity market prices — subcategory_id (crop type), yard_id (market), min_price, max_price, price_date",
     "seeds":                   "Seed products with subcategory_id and variety info",
     "user_products":           "Products owned/listed by users with price range and subcategory",
@@ -199,29 +173,26 @@ TABLE_CONTEXTS = {
     "kshop_companies":         "Companies selling in K-Shop — referenced as kshop_company_id",
     "kshop_categories":        "Product categories in K-Shop — referenced as kshop_category_id",
     "kshop_products":          "Products in K-Shop — name (Gujarati), price, discount_price, description, kshop_company_id. status=1 means active",
-    "kshop_orders":            "Orders in K-Shop — user_id, kshop_product_id, kshop_company_id, order_status_id",
+    "kshop_orders":            "Orders in K-Shop —  kshop_product_id, kshop_company_id, order_status_id",
     "kshop_weights":           "Weight units for K-Shop products",
     "kshop_category_company":  "Junction table: K-Shop companies ↔ categories",
     "company_orders":          "Orders from company perspective — linked to farmer_orders",
-    "farmer_orders":           "Orders from farmer perspective — user_id=farmer, company_id→kshop_companies",
+    "farmer_orders":           "Orders from farmer perspective —  company_id→kshop_companies",
     "order_statuses":          "Order status lookup (pending, processing, completed, cancelled)",
-    "video_posts":             "Educational agricultural videos — title, video_url, views_count, user_id (creator), video_category_id",
+    "video_posts":             "Educational agricultural videos — title, video_url, views_count, video_category_id",
     "video_categories":        "Categories for educational videos — referenced as video_category_id",
-    "video_likes":             "User likes on videos — video_post_id and user_id",
-    "video_comments":          "Comments on videos — video_post_id, user_id, parent_comment_id (for replies)",
-    "video_comment_likes":     "Likes on video comments — comment_id and user_id",
+    "video_likes":             "User likes on videos — video_post_id",
+    "video_comments":          "Comments on videos — video_post_id, parent_comment_id (for replies)",
+    "video_comment_likes":     "Likes on video comments — comment_id",
     "video_saves":             "Videos bookmarked/saved by users",
     "video_shares":            "Video sharing tracking — includes platform field",
-    "video_views":             "Video view tracking — user_id and ip_address",
+    "video_views":             "Video view tracking — ip_address",
     "user_video_categories":   "User preferences for video categories they follow",
     "news":                    "Agricultural news articles — title, description, state_id, city_id, taluka_id for location filtering",
     "news_types":              "Types/categories of news articles",
     "states":                  "Indian states list — referenced as state_id",
     "cities":                  "Cities within states — has state_id. Referenced as city_id",
     "talukas":                 "Talukas (sub-districts) within cities — has city_id. Referenced as taluka_id",
-    "user_talukas":            "User location preferences (which talukas they belong to)",
-    "notifications":           "User push notifications",
-    "user_otps":               "OTP codes for user mobile authentication",
     "media":                   "Media file storage references (images, documents)",
     "mediables":               "Polymorphic link table connecting media files to various models",
     "settings":                "Application configuration key-value pairs",
@@ -388,10 +359,9 @@ class SchemaGenerator:
                 # NOTE: No status = 'active' filter here — per SQL generation Rule #12,
                 # status filtering is handled by the post-retrieval status_filter layer.
                 # Adding it in SQL would silently exclude 'sold_out' and other valid states.
-                "SELECT bp.id, bp.product_name, bp.price, bp.quantity_available, bp.images, bc.name AS category, bc.image AS category_image, u.name AS seller "
+                "SELECT bp.id, bp.product_name, bp.price, bp.quantity_available, bp.images, bc.name AS category, bc.image AS category_image "
                 "FROM buy_sell_products bp "
                 "LEFT JOIN buy_sell_categories bc ON bp.category_id = bc.id AND bc.deleted_at IS NULL "
-                "LEFT JOIN users u ON bp.seller_id = u.id "
                 "WHERE bp.deleted_at IS NULL "
                 "AND bp.category_id IN (SELECT id FROM buy_sell_categories WHERE name LIKE '%tractor%' OR name LIKE '%ટ્રેક્ટર%' AND deleted_at IS NULL) "
                 "ORDER BY bp.created_at DESC LIMIT 50",

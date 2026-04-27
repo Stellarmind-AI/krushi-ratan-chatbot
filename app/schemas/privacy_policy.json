@@ -29,12 +29,7 @@
     "weights",
     "yards"
   ],
-  "join_only_tables": {
-    "users": {
-      "allowed_columns": ["name"],
-      "description": "May be joined only to show a public seller or creator display name."
-    }
-  },
+  "join_only_tables": { },
   "excluded_tables": [
     "buy_sell_orders",
     "company_orders",
@@ -92,12 +87,5 @@
     "offline_buyer"
   ],
   "user_identifier_column_patterns": [
-    "^user_id$",
-    ".*_user_id$",
-    "^seller_id$",
-    "^buyer_id$",
-    "^farmer_id$",
-    "^owner_id$",
-    "^notifiable_id$"
   ]
 }
