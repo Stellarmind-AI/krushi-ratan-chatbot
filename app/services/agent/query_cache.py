@@ -226,14 +226,47 @@ _FUZZY_TOKEN_MIN_LEN = 4
 _FUZZY_ROOT_MIN_LEN  = 5
 _FUZZY_POOL = [r for r in _ALL_ROOTS if len(r) >= _FUZZY_ROOT_MIN_LEN]
 
+# Category-prefix layer — catches truncated category fragments that fuzzy
+# misses because difflib's character-set ratio falls below 0.85 when the
+# fragment is much shorter than the root (e.g. "prod" vs "product" → 0.73).
+#
+# Real-world hits this closes:
+#   "tell me about prod"   → "prod" is a fragment of "product"   → filler
+#   "show vide"            → "vide" is a fragment of "video"     → filler
+#   "give me cate list"    → "cate" is a fragment of "category"  → filler
+#   "any orde"             → "orde" is a fragment of "order"     → filler
+#
+# Constraints to avoid false positives on real keywords:
+#   1. Only INFLECTABLE CATEGORY roots are eligible — these are app-domain
+#      browse words that are NEVER specific items.  Roots from other groups
+#      (verbs/prepositions/etc.) are already covered by exact + suffix regex.
+#   2. Roots must be ≥5 chars so a ≥4-char prefix is unambiguous.  Shorter
+#      roots like "crop", "seed", "yard" are already filler via exact match.
+#   3. Token must be ≥4 chars AND strictly shorter than the root.
+#
+# Verified non-collisions against real keywords used in the app:
+#   "kapas", "motor", "weeder", "balwan", "tractor", "thresher", "wheat",
+#   "ghau", "bajra", "magfali", "onion", "tomato" — none are prefixes of
+#   any CATEGORY root in this set.
+_CATEGORY_PREFIX_MIN_LEN  = 4
+_CATEGORY_PREFIX_ROOT_MIN = 5
+_CATEGORY_PREFIX_ROOTS: Set[str] = {
+    r for r in _ROOTS_BY_GROUP["CATEGORY"]["roots"]   # type: ignore[index,union-attr]
+    if len(r) >= _CATEGORY_PREFIX_ROOT_MIN
+}
+
 
 def is_filler_token(token: str) -> bool:
     """
-    True if the token is a filler/intent/category word (regex or fuzzy match).
+    True if the token is a filler/intent/category word.
 
-    - Regex layer: matches root + any common inflection (s/es/ing/ed/er/ly/...).
-    - Fuzzy layer: edit-distance tolerance for tokens ≥4 chars (typo safety).
-    - Gujarati-script tokens: exact match against the Gujarati filler set.
+    Layers (cheapest first; first hit wins):
+      - Regex layer: roots + common inflection (s/es/ing/ed/er/ly/...).
+      - Gujarati-script tokens: exact match against the Gujarati filler set.
+      - Category-prefix layer: token is a ≥4-char prefix of an inflectable
+        CATEGORY root ≥5 chars (e.g. "prod" → "product"). Catches user
+        truncations the fuzzy layer misses.
+      - Fuzzy layer: edit-distance tolerance for tokens ≥4 chars (typo safety).
 
     Used by:
       - Cache-key normalization (every token filtered individually)
@@ -250,6 +283,11 @@ def is_filler_token(token: str) -> bool:
     # Gujarati script exact-match
     if t in _GUJARATI_FILLERS:
         return True
+    # Category-prefix layer — handles truncated browse words
+    if len(t) >= _CATEGORY_PREFIX_MIN_LEN:
+        for root in _CATEGORY_PREFIX_ROOTS:
+            if len(t) < len(root) and root.startswith(t):
+                return True
     # Fuzzy layer — typo tolerance (regex didn't match; is this a typo?)
     if len(t) >= _FUZZY_TOKEN_MIN_LEN:
         if difflib.get_close_matches(t, _FUZZY_POOL, n=1, cutoff=_FUZZY_CUTOFF):

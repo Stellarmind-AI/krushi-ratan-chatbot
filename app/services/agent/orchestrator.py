@@ -691,11 +691,23 @@ class Orchestrator:
         # e.g. Hindi 'કાંદા' for onion when the DB stores Gujarati 'ડુંગળી'.
         # Auto-detection closes that guessing surface whenever the query names
         # a keyword we've curated variants for.
+        # Only inject a KEYWORD SEARCH VARIANTS section when we have an
+        # AUTHORITATIVE curated variant list (from _KV_BASE). Otherwise leave
+        # it out so the LLM falls through to rule 4(b) and generates Gujarati
+        # script translation itself.
+        #
+        # Why this matters: previously we injected `[keyword_hint]` even when
+        # the keyword wasn't in _KV_BASE — that single-element section combined
+        # with rule 4(a) ("use ONLY listed variants") trapped the LLM into
+        # English-only LIKE clauses, missing all Gujarati DB rows.
+        # See: user-reported "i want use motor" / "i want motore" failures.
         hint_pairs: List[tuple] = []
         if keyword_hint:
-            variants = KEYWORD_VARIANTS.get(keyword_hint.lower(),
-                       KEYWORD_VARIANTS.get(keyword_hint, [keyword_hint]))
-            hint_pairs.append((keyword_hint, list(variants)))
+            variants = (KEYWORD_VARIANTS.get(keyword_hint.lower())
+                        or KEYWORD_VARIANTS.get(keyword_hint))
+            if variants:
+                hint_pairs.append((keyword_hint, list(variants)))
+            # else: no curated variants → skip section, rule 4(b) handles translation
         else:
             hint_pairs = self._detect_keywords_in_query(query)
 
@@ -787,15 +799,57 @@ RULES:
 2. Strip intent words before extracting product keywords:
    intent words = mare, maro, karvu, karu, che, purchase, from, kshop, levu, joiye, apo, batao, please
 3. Search each keyword INDEPENDENTLY with OR — never use full phrase LIKE
-4. PRODUCT / CROP KEYWORDS — CRITICAL:
-   a) If a "KEYWORD SEARCH VARIANTS" section is present above, use ONLY the
-      variants listed there.  Do NOT add your own Gujarati/Hindi translations.
-      Example: if the section shows "'onion' → ['onion', 'dungli', 'kanda', 'ડુંગળી']",
-      your WHERE clause must search for those four strings and nothing else.
+4. PRODUCT / CROP / EQUIPMENT KEYWORDS — MULTILINGUAL SEARCH (CRITICAL):
+   The database stores text in BOTH Gujarati script (PRIMARY) AND English/Romanized.
+   Every keyword search MUST cover both forms or rows will silently be missed.
+
+   a) AUTHORITATIVE OVERRIDE — if a "KEYWORD SEARCH VARIANTS" section is present
+      above, use ONLY the variants listed there. Do NOT add your own translations.
+      Example: section shows "'onion' → ['onion', 'dungli', 'kanda', 'ડુંગળી']" —
+      your WHERE must search for those four strings and nothing else.
       Do NOT invent 'કાંદા', 'प्याज', or any other equivalent.
-   b) If NO variants section is present for a keyword, search in exactly the
-      script(s) the user typed — do not translate.
-   c) Search each keyword INDEPENDENTLY with OR across the full variant list.
+
+   b) NO VARIANTS SECTION → GENERATE GUJARATI YOURSELF:
+      For every keyword in the user query (product, crop, equipment, technical term):
+      • Always include the user's original form (as typed)
+      • Always include the Gujarati script equivalent
+      • If the user typed Gujarati script, also include the Romanized form
+
+      ⚠️ CRITICAL — GUJARATI, NOT HINDI:
+      The database stores GUJARATI words. Hindi words are WRONG even when written
+      in Gujarati script. For traditional crops/vegetables/fruits where the Hindi
+      and Gujarati words differ, follow this table strictly:
+
+        Concept       Gujarati ✓         Hindi ✗ (do NOT use)
+        ───────────────────────────────────────────────────────
+        onion         ડુંગળી              કાંદા / प्याज
+        tomato        ટામેટા              ટમાટર / टमाटर
+        potato        બટાકા               આલુ / आलू
+        garlic        લસણ                 લહસુન / लहसुन
+        rice          ચોખા / ડાંગર         ચાવલ / चावल
+
+      For TECHNICAL / EQUIPMENT terms, use phonetic transliteration to Gujarati script:
+
+        English      Gujarati script
+        ────────────────────────────
+        motor       → મોટર
+        tractor     → ટ્રેક્ટર
+        pump        → પંપ
+        sprayer     → સ્પ્રેયર
+        thresher    → થ્રેસર
+        harvester   → હાર્વેસ્ટર
+        cultivator  → કલ્ટિવેટર
+        rotavator   → રોટાવેટર
+        seeder      → સીડર
+
+      For unknown words, transliterate phonetically into Gujarati script.
+      Example WHERE forms:
+        keyword "motor"     → name LIKE '%motor%' OR name LIKE '%મોટર%'
+        keyword "harvester" → name LIKE '%harvester%' OR name LIKE '%હાર્વેસ્ટર%'
+        keyword "ઘઉં"        → name LIKE '%ઘઉં%' OR name LIKE '%ghau%' OR name LIKE '%wheat%'
+
+   c) Search each keyword INDEPENDENTLY with OR across the full variant list —
+      NEVER use a full-phrase LIKE.
 5. JOINS — MANDATORY: for every primary table that has entries under its JOINS block,
    (a) copy those JOIN clauses verbatim into your FROM clause (JOIN vs LEFT JOIN exactly as shown),
    (b) in the SELECT list, return the joined tables' descriptive columns
@@ -1085,7 +1139,17 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
         Parses the pre-compiled schema to:
           1. Include JOIN clauses so FK columns resolve to human-readable names
           2. Replace raw _id columns with joined_table.name in SELECT
-          3. Skip metadata columns (id, updated_at, deleted_at) for cleaner output
+          3. Project img/image/images columns from BOTH the primary table and
+             every JOINed table (annotated as "-- img cols: X" by
+             _build_compiled_schemas) so the frontend always receives image
+             data — same coverage as the LLM-generated SQL path (Rule 13).
+          4. Skip metadata columns (id, updated_at, deleted_at, status) for
+             cleaner output
+
+        SELECT projection uses priority-based bucketing — image columns are
+        always included regardless of column count. Capping the SELECT list
+        was previously dropping img cols silently when wide tables (e.g.
+        buy_sell_products) had more non-skip cols than the cap.
         """
         schema = compiled_schema or ""
 
@@ -1096,12 +1160,15 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
         if primary_table == "kshop_products":
             clauses.append(f"{primary_table}.status = 1")
 
-        # ── Parse JOINS block → map FK column to (join_clause, ref_table) ──
+        # ── Parse JOINS block → map FK column to ref_table; also capture
+        # the "-- img cols: X" annotation per ref_table so we can project
+        # joined-table image columns alongside the joined-table name.
         # Compiled schema format:
         #   JOINS:
-        #     JOIN sub_categories ON products.subcategory_id = sub_categories.id
+        #     JOIN sub_categories ON products.subcategory_id = sub_categories.id  -- img cols: img
         #     LEFT JOIN yards ON products.yard_id = yards.id
-        fk_map: Dict[str, str] = {}       # FK col → ref_table
+        fk_map: Dict[str, str] = {}                  # FK col → ref_table
+        img_cols_by_ref: Dict[str, List[str]] = {}   # ref_table → ["img"] / ["image"] / ...
         join_clauses: List[str] = []
         joins_match = re.search(r"JOINS:\n(.*?)(?:\n  [A-Z]|\Z)", schema, re.DOTALL)
         if joins_match:
@@ -1109,10 +1176,19 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
                 line = line.strip()
                 if not line or line.startswith("(no"):
                     continue
+                # Capture img-cols annotation BEFORE stripping the comment.
+                # _build_compiled_schemas appends "  -- img cols: X" to JOIN
+                # lines so the LLM can see which joined tables have image
+                # columns. We use the same annotation here to project those
+                # columns — closing the gap between the LLM and exploratory
+                # SQL paths.
+                img_match = re.search(r"--\s*img cols:\s*(.+?)\s*$", line)
+                line_img_cols = (
+                    [c.strip() for c in img_match.group(1).split(",") if c.strip()]
+                    if img_match else []
+                )
                 # Strip any inline SQL comment before using the line in actual SQL.
-                # _build_compiled_schemas appends "  -- img cols: X" annotations to
-                # JOIN lines so the LLM can see which joined tables have image columns.
-                # Those annotations are LLM-context-only — they must never reach the
+                # The annotations are LLM-context-only — they must never reach the
                 # SQL executor because MySQL treats "-- " as a line comment, which
                 # would comment out everything after it (including WHERE and ORDER BY).
                 clean_line = re.sub(r'\s*--.*$', '', line).strip()
@@ -1125,12 +1201,33 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
                     ref_table = m.group(2)
                     fk_col = m.group(3)       # e.g. "yard_id"
                     fk_map[fk_col] = ref_table
+                    if line_img_cols:
+                        img_cols_by_ref[ref_table] = line_img_cols
                     join_clauses.append(clean_line)  # always use comment-stripped line
 
-        # ── Parse COLUMNS → build SELECT list ──
-        # Skip metadata; replace FK _id cols with ref_table.name
+        # ── Parse COLUMNS → bucket-based SELECT list ──
+        # Three buckets — priority and image are MANDATORY (never trimmed),
+        # other fills remaining slots up to MAX_COLUMNS:
+        #   priority — display, price, time, quantity, joined-table names
+        #   image    — img/image/images on primary OR joined tables
+        #   other    — everything else not in skip_cols
         skip_cols = {"id", "updated_at", "deleted_at", "status"}
-        select_parts: List[str] = []
+        img_col_names = {"img", "image", "images"}
+        priority_col_names = {
+            # Display / identifier
+            "name", "product_name", "title", "description",
+            # Price / numeric
+            "price", "min_price", "max_price", "discount_price", "price_date",
+            # Quantity / metric
+            "quantity_available", "weight_value", "views_count",
+            # Time
+            "created_at",
+        }
+        MAX_COLUMNS = 12
+
+        priority_parts: List[str] = []
+        image_parts:    List[str] = []
+        other_parts:    List[str] = []
         seen_refs: set = set()
 
         col_match = re.search(r"COLUMNS:\s*(.*)", schema)
@@ -1142,13 +1239,35 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
                 if col in fk_map:
                     ref_table = fk_map[col]
                     if ref_table not in seen_refs:
-                        select_parts.append(f"{ref_table}.name AS {ref_table}_name")
+                        # Joined-table descriptive name → priority bucket
+                        priority_parts.append(
+                            f"{ref_table}.name AS {ref_table}_name"
+                        )
+                        # Joined-table image columns → image bucket (mandatory)
+                        # Deterministic alias: <ref_table>_<col> (e.g. sub_categories_img,
+                        # buy_sell_categories_image). Frontend scans for any column
+                        # ending in img/image/images regardless of alias prefix.
+                        for img_col in img_cols_by_ref.get(ref_table, []):
+                            image_parts.append(
+                                f"{ref_table}.{img_col} AS {ref_table}_{img_col}"
+                            )
                         seen_refs.add(ref_table)
                     # Don't also select the raw _id
+                elif col in img_col_names:
+                    # Primary-table image column → image bucket (mandatory)
+                    image_parts.append(f"{primary_table}.{col}")
+                elif col in priority_col_names:
+                    priority_parts.append(f"{primary_table}.{col}")
                 else:
-                    select_parts.append(f"{primary_table}.{col}")
+                    other_parts.append(f"{primary_table}.{col}")
 
-        select_cols = ", ".join(select_parts[:10]) if select_parts else f"{primary_table}.*"
+        # Priority + image always included. Other fills remaining slots.
+        select_parts: List[str] = priority_parts + image_parts
+        remaining = MAX_COLUMNS - len(select_parts)
+        if remaining > 0:
+            select_parts.extend(other_parts[:remaining])
+
+        select_cols = ", ".join(select_parts) if select_parts else f"{primary_table}.*"
         joins_sql = " ".join(join_clauses)
         where = " AND ".join(clauses) if clauses else "1=1"
 
