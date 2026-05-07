@@ -11,6 +11,7 @@ import os
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 from app.core.logger import get_logger
+from app.utils.privacy_policy import PrivacyPolicy, get_privacy_policy
 
 logger = get_logger("schema_generator")
 
@@ -41,26 +42,20 @@ VERIFIED_FK_MAP: Dict[str, List[Dict]] = {
     ],
     "buy_sell_orders": [
         {"column": "product_id", "references": "buy_sell_products.id", "join_type": "JOIN",      "description": "Product being ordered"},
-        {"column": "buyer_id",   "references": "users.id",             "join_type": "LEFT JOIN", "description": "User who is buying"},
-        {"column": "seller_id",  "references": "users.id",             "join_type": "LEFT JOIN", "description": "User who is selling"},
     ],
     "buy_sell_products": [
         {"column": "category_id", "references": "buy_sell_categories.id", "join_type": "LEFT JOIN", "description": "Product category"},
-        {"column": "seller_id",   "references": "users.id",               "join_type": "LEFT JOIN", "description": "Farmer/user selling this product"},
     ],
     "cities": [
         {"column": "state_id", "references": "states.id", "join_type": "LEFT JOIN", "description": "State this city belongs to"},
     ],
     "company_orders": [
         {"column": "farmer_order_id", "references": "farmer_orders.id",  "join_type": "JOIN",      "description": "Related farmer order"},
-        {"column": "user_id",         "references": "users.id",          "join_type": "LEFT JOIN", "description": "User placing the order"},
-        {"column": "farmer_id",       "references": "users.id",          "join_type": "LEFT JOIN", "description": "Farmer in the order"},
         {"column": "order_status_id", "references": "order_statuses.id", "join_type": "LEFT JOIN", "description": "Current order status"},
         {"column": "subcategory_id",  "references": "sub_categories.id", "join_type": "LEFT JOIN", "description": "Product subcategory"},
         {"column": "weight_id",       "references": "weights.id",        "join_type": "LEFT JOIN", "description": "Weight unit"},
     ],
     "farmer_orders": [
-        {"column": "user_id",         "references": "users.id",           "join_type": "LEFT JOIN", "description": "Farmer placing the order"},
         {"column": "company_id",      "references": "kshop_companies.id", "join_type": "LEFT JOIN", "description": "Company receiving the order"},
         {"column": "order_status_id", "references": "order_statuses.id",  "join_type": "LEFT JOIN", "description": "Order status"},
         {"column": "subcategory_id",  "references": "sub_categories.id",  "join_type": "LEFT JOIN", "description": "Product subcategory"},
@@ -75,7 +70,6 @@ VERIFIED_FK_MAP: Dict[str, List[Dict]] = {
         {"column": "kshop_category_id", "references": "kshop_categories.id", "join_type": "LEFT JOIN", "description": "Product category"},
         {"column": "kshop_company_id",  "references": "kshop_companies.id",  "join_type": "LEFT JOIN", "description": "Company supplying product"},
         {"column": "order_status_id",   "references": "order_statuses.id",   "join_type": "LEFT JOIN", "description": "Order status"},
-        {"column": "user_id",           "references": "users.id",            "join_type": "LEFT JOIN", "description": "User who placed order"},
     ],
     "kshop_products": [
         {"column": "kshop_company_id",  "references": "kshop_companies.id",  "join_type": "JOIN",      "description": "Company that makes/sells this product (always set)"},
@@ -107,52 +101,34 @@ VERIFIED_FK_MAP: Dict[str, List[Dict]] = {
     ],
     "user_products": [
         {"column": "subcategory_id", "references": "sub_categories.id", "join_type": "LEFT JOIN", "description": "Product subcategory"},
-        {"column": "user_id",        "references": "users.id",           "join_type": "JOIN",      "description": "Owner farmer/user"},
     ],
     "user_subcategories": [
         {"column": "subcategory_id", "references": "sub_categories.id", "join_type": "LEFT JOIN", "description": "Preferred subcategory"},
-        {"column": "user_id",        "references": "users.id",           "join_type": "JOIN",      "description": "User"},
-    ],
-    "user_talukas": [
-        {"column": "user_id",   "references": "users.id",   "join_type": "JOIN", "description": "User"},
-        {"column": "taluka_id", "references": "talukas.id", "join_type": "JOIN", "description": "Taluka user belongs to"},
     ],
     "user_video_categories": [
-        {"column": "user_id",           "references": "users.id",            "join_type": "JOIN", "description": "User"},
         {"column": "video_category_id", "references": "video_categories.id", "join_type": "JOIN", "description": "Preferred video category"},
-    ],
-    "users": [
-        {"column": "state_id", "references": "states.id", "join_type": "LEFT JOIN", "description": "State of user"},
-        {"column": "city_id",  "references": "cities.id", "join_type": "LEFT JOIN", "description": "City of user"},
     ],
     "video_comment_likes": [
         {"column": "comment_id", "references": "video_comments.id", "join_type": "JOIN", "description": "Comment that was liked"},
-        {"column": "user_id",    "references": "users.id",          "join_type": "JOIN", "description": "User who liked"},
     ],
     "video_comments": [
         {"column": "video_post_id",     "references": "video_posts.id",    "join_type": "JOIN",      "description": "Video being commented on"},
-        {"column": "user_id",           "references": "users.id",          "join_type": "JOIN",      "description": "User who commented"},
         {"column": "parent_comment_id", "references": "video_comments.id", "join_type": "LEFT JOIN", "description": "Parent comment if reply (self-reference)"},
     ],
     "video_likes": [
         {"column": "video_post_id", "references": "video_posts.id", "join_type": "JOIN", "description": "Video that was liked"},
-        {"column": "user_id",       "references": "users.id",       "join_type": "JOIN", "description": "User who liked"},
     ],
     "video_posts": [
-        {"column": "user_id",           "references": "users.id",            "join_type": "JOIN",      "description": "User who posted video"},
         {"column": "video_category_id", "references": "video_categories.id", "join_type": "LEFT JOIN", "description": "Video category"},
     ],
     "video_saves": [
         {"column": "video_post_id", "references": "video_posts.id", "join_type": "JOIN", "description": "Saved video"},
-        {"column": "user_id",       "references": "users.id",       "join_type": "JOIN", "description": "User who saved"},
     ],
     "video_shares": [
         {"column": "video_post_id", "references": "video_posts.id", "join_type": "JOIN", "description": "Shared video"},
-        {"column": "user_id",       "references": "users.id",       "join_type": "JOIN", "description": "User who shared"},
     ],
     "video_views": [
         {"column": "video_post_id", "references": "video_posts.id", "join_type": "JOIN", "description": "Viewed video"},
-        {"column": "user_id",       "references": "users.id",       "join_type": "JOIN", "description": "User who viewed"},
     ],
     "yards": [
         {"column": "state_id",  "references": "states.id",  "join_type": "LEFT JOIN", "description": "State of this yard"},
@@ -171,25 +147,23 @@ SOFT_DELETE_TABLES = {
     "users","video_categories","video_comments","video_posts","weights","yards",
 }
 
+# kshop_products is the ONLY table where the SQL layer adds a status = 1 filter.
+# All other tables' status handling is done by the post-retrieval status_filter
+# layer — NOT in SQL. Adding status conditions in SQL for other tables silently
+# drops rows with valid non-'active' states (e.g. buy_sell 'sold_out') that the
+# user may legitimately want to see. This aligns with orchestrator Rule #12.
 STATUS_NOTES = {
-    "kshop_products":   "Active only: WHERE status = 1 AND deleted_at IS NULL",
-    "buy_sell_products":"Active only: WHERE status = 'active' AND deleted_at IS NULL",
-    "video_posts":      "Published only: WHERE status = 1 AND deleted_at IS NULL",
-    "kshop_companies":  "Active only: WHERE status = 1 AND deleted_at IS NULL",
-    "kshop_categories": "Active only: WHERE status = 1 AND deleted_at IS NULL",
-    "sub_categories":   "Active only: WHERE status = 1 AND deleted_at IS NULL",
-    "users":            "Active only: WHERE status = 1 AND deleted_at IS NULL",
+    "kshop_products": "Active only: WHERE kshop_products.status = 1 AND kshop_products.deleted_at IS NULL",
 }
 
 TABLE_CONTEXTS = {
-    "users":                   "Farmer and user accounts — profile, contact, location. Referenced as user_id, seller_id, buyer_id, farmer_id",
     "buy_sell_categories":     "Categories for buy/sell marketplace (animals, equipment, crops). Referenced as category_id in buy_sell_products",
-    "buy_sell_products":       "Marketplace product listings by farmers — product_name, price, quantity, status='active'/'sold_out'. seller_id→users",
+    "buy_sell_products":       "Marketplace product listings by farmers — product_name, price, quantity, status='active'/'sold_out'.",
     "buy_sell_orders":         "Purchase transactions in buy/sell marketplace — buyer_id and seller_id both reference users",
     "buy_sell_category_fields":"Custom form fields per buy/sell product category",
     "buy_sell_category_steps": "Multi-step form wizard steps for buy/sell product listing",
     "categories":              "Main product categories — referenced by sub_categories",
-    "sub_categories":          "Sub-categories under main categories — referenced as subcategory_id in products, seeds, user_products",
+    "sub_categories":          "Sub-categories under main categories — referenced as subcategory_id in products, seeds",
     "products":                "Crop/commodity market prices — subcategory_id (crop type), yard_id (market), min_price, max_price, price_date",
     "seeds":                   "Seed products with subcategory_id and variety info",
     "user_products":           "Products owned/listed by users with price range and subcategory",
@@ -199,29 +173,26 @@ TABLE_CONTEXTS = {
     "kshop_companies":         "Companies selling in K-Shop — referenced as kshop_company_id",
     "kshop_categories":        "Product categories in K-Shop — referenced as kshop_category_id",
     "kshop_products":          "Products in K-Shop — name (Gujarati), price, discount_price, description, kshop_company_id. status=1 means active",
-    "kshop_orders":            "Orders in K-Shop — user_id, kshop_product_id, kshop_company_id, order_status_id",
+    "kshop_orders":            "Orders in K-Shop —  kshop_product_id, kshop_company_id, order_status_id",
     "kshop_weights":           "Weight units for K-Shop products",
     "kshop_category_company":  "Junction table: K-Shop companies ↔ categories",
     "company_orders":          "Orders from company perspective — linked to farmer_orders",
-    "farmer_orders":           "Orders from farmer perspective — user_id=farmer, company_id→kshop_companies",
+    "farmer_orders":           "Orders from farmer perspective —  company_id→kshop_companies",
     "order_statuses":          "Order status lookup (pending, processing, completed, cancelled)",
-    "video_posts":             "Educational agricultural videos — title, video_url, views_count, user_id (creator), video_category_id",
+    "video_posts":             "Educational agricultural videos — title, video_url, views_count, video_category_id",
     "video_categories":        "Categories for educational videos — referenced as video_category_id",
-    "video_likes":             "User likes on videos — video_post_id and user_id",
-    "video_comments":          "Comments on videos — video_post_id, user_id, parent_comment_id (for replies)",
-    "video_comment_likes":     "Likes on video comments — comment_id and user_id",
+    "video_likes":             "User likes on videos — video_post_id",
+    "video_comments":          "Comments on videos — video_post_id, parent_comment_id (for replies)",
+    "video_comment_likes":     "Likes on video comments — comment_id",
     "video_saves":             "Videos bookmarked/saved by users",
     "video_shares":            "Video sharing tracking — includes platform field",
-    "video_views":             "Video view tracking — user_id and ip_address",
+    "video_views":             "Video view tracking — ip_address",
     "user_video_categories":   "User preferences for video categories they follow",
     "news":                    "Agricultural news articles — title, description, state_id, city_id, taluka_id for location filtering",
     "news_types":              "Types/categories of news articles",
     "states":                  "Indian states list — referenced as state_id",
     "cities":                  "Cities within states — has state_id. Referenced as city_id",
     "talukas":                 "Talukas (sub-districts) within cities — has city_id. Referenced as taluka_id",
-    "user_talukas":            "User location preferences (which talukas they belong to)",
-    "notifications":           "User push notifications",
-    "user_otps":               "OTP codes for user mobile authentication",
     "media":                   "Media file storage references (images, documents)",
     "mediables":               "Polymorphic link table connecting media files to various models",
     "settings":                "Application configuration key-value pairs",
@@ -232,13 +203,20 @@ TABLE_CONTEXTS = {
 class SchemaGenerator:
     """Generates condensed schema and tool files from full_schema.json."""
 
-    def __init__(self, full_schema_path: str, schemas_dir: str, tools_dir: str):
+    def __init__(
+        self,
+        full_schema_path: str,
+        schemas_dir: str,
+        tools_dir: str,
+        privacy_policy_path: Optional[str] = None,
+    ):
         # Resolve to ABSOLUTE paths at construction time so later operations
         # work regardless of cwd changes (uvicorn reloader, threading, etc.)
         self.full_schema_path      = os.path.abspath(full_schema_path)
         self.schemas_dir           = os.path.abspath(schemas_dir)
         self.tools_dir             = os.path.abspath(tools_dir)
         self.condensed_schema_path = os.path.join(self.schemas_dir, "condensed_schema.json")
+        self.privacy_policy: PrivacyPolicy = get_privacy_policy(privacy_policy_path)
         Path(self.schemas_dir).mkdir(parents=True, exist_ok=True)
         Path(self.tools_dir).mkdir(parents=True, exist_ok=True)
         logger.info(
@@ -261,22 +239,51 @@ class SchemaGenerator:
             raise
 
     def generate_condensed_schema(self, full_schema: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate minimal condensed schema — table names + context descriptions."""
-        logger.info("🔧 Generating condensed schema...")
+        """Generate minimal sanitized schema: public table names + contexts."""
+        logger.info("Generating sanitized condensed schema...")
         condensed = {
             "database_name": full_schema.get("database_name", "unknown"),
-            "description":   "Agricultural marketplace database — Krushi Ratn",
-            "total_tables":  full_schema.get("total_tables", 0),
-            "tables":        [],
+            "description": "Agricultural marketplace database - Krushi Ratn",
+            "privacy_policy_version": self.privacy_policy.version,
+            "privacy_policy_hash": self.privacy_policy.policy_hash,
+            "privacy_mode": self.privacy_policy.mode,
+            "total_tables": 0,
+            "tables": [],
         }
         for table in full_schema.get("tables", []):
             table_name = table.get("table_name")
+            if not self.privacy_policy.is_queryable_table(table_name):
+                logger.info(f"Privacy policy excluded table from condensed schema: {table_name}")
+                continue
             context = TABLE_CONTEXTS.get(table_name, f"Data related to {table_name.replace('_', ' ')}")
             if table_name not in TABLE_CONTEXTS:
-                logger.warning(f"⚠️  No context defined for table: {table_name}")
+                logger.warning(f"No context defined for table: {table_name}")
             condensed["tables"].append({"name": table_name, "context": context})
-        logger.info("✅ Condensed schema generated", tables=len(condensed["tables"]))
+        condensed["total_tables"] = len(condensed["tables"])
+        logger.info("Sanitized condensed schema generated", tables=len(condensed["tables"]))
         return condensed
+
+    def _safe_columns_for_table(self, table_name: str, columns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            col for col in columns
+            if self.privacy_policy.is_safe_tool_column(table_name, col.get("name", ""))
+        ]
+
+    def _safe_relationships_for_table(self, table_name: str) -> List[Dict[str, Any]]:
+        relationships = []
+        for rel in VERIFIED_FK_MAP.get(table_name, []):
+            ref = rel.get("references", "")
+            if not ref or "." not in ref:
+                continue
+            ref_table = ref.split(".", 1)[0]
+            if self.privacy_policy.is_sql_visible_table(ref_table):
+                relationships.append(dict(rel))
+            else:
+                logger.info(
+                    f"Privacy policy removed relationship: "
+                    f"{table_name}.{rel.get('column')} -> {ref}"
+                )
+        return relationships
 
     def generate_tool_for_table(self, table: Dict[str, Any], database_name: str) -> Dict[str, Any]:
         """
@@ -284,7 +291,7 @@ class SchemaGenerator:
         Uses VERIFIED_FK_MAP — no naive inference.
         """
         table_name = table.get("table_name")
-        columns    = table.get("columns", [])
+        columns    = self._safe_columns_for_table(table_name, table.get("columns", []))
 
         column_details = []
         for col in columns:
@@ -299,8 +306,9 @@ class SchemaGenerator:
                 col_detail["comment"] = col.get("comment")
             column_details.append(col_detail)
 
-        # Verified relationships — no guessing
-        relationships = VERIFIED_FK_MAP.get(table_name, [])
+        # Verified relationships, filtered through privacy policy. Join-only
+        # tables can remain as FK metadata without getting their own query tool.
+        relationships = self._safe_relationships_for_table(table_name)
 
         notes = [
             "Only SELECT queries allowed (READ-ONLY)",
@@ -324,38 +332,42 @@ class SchemaGenerator:
             "description":    TABLE_CONTEXTS.get(table_name, f"Query the {table_name} table"),
             "table_name":     table_name,
             "database":       database_name,
+            "privacy_policy_version": self.privacy_policy.version,
+            "privacy_policy_hash": self.privacy_policy.policy_hash,
+            "join_only_tables": sorted(self.privacy_policy.join_only_tables.keys()),
             "engine":         table.get("engine", "InnoDB"),
             "columns":        column_details,
             "column_count":   len(column_details),
             "relationships":  relationships,
-            "example_queries": self._build_example_queries(table_name),
+            "example_queries": self._build_example_queries(table_name, [c["name"] for c in column_details]),
             "notes":          notes,
         }
 
-    def _build_example_queries(self, table_name: str) -> List[str]:
+    def _build_example_queries(self, table_name: str, safe_columns: Optional[List[str]] = None) -> List[str]:
         examples = {
             "kshop_products": [
-                "SELECT kp.name, kp.price, kp.discount_price, kco.name AS company, COALESCE(kc.name,'N/A') AS category "
+                "SELECT kp.id, kp.name, kp.price, kp.discount_price, kco.name AS company, kc.name AS category, kc.img AS category_img "
                 "FROM kshop_products kp "
                 "JOIN kshop_companies kco ON kp.kshop_company_id = kco.id "
                 "LEFT JOIN kshop_categories kc ON kp.kshop_category_id = kc.id AND kc.deleted_at IS NULL "
                 "LEFT JOIN kshop_weights kw ON kp.kshop_weight_id = kw.id "
                 "WHERE kp.deleted_at IS NULL AND kp.status = 1 "
-                "AND (kp.name LIKE '%balwan%' OR kp.name LIKE '%બલવાન%') "
-                "AND (kp.name LIKE '%weeder%' OR kp.name LIKE '%વીડર%') "
+                "AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE name LIKE '%weeder%' OR name LIKE '%વીડર%' AND deleted_at IS NULL) "
                 "ORDER BY kp.updated_at DESC LIMIT 50",
             ],
             "buy_sell_products": [
-                "SELECT bp.product_name, bp.price, bp.quantity_available, bc.name AS category, u.name AS seller "
+                # NOTE: No status = 'active' filter here — per SQL generation Rule #12,
+                # status filtering is handled by the post-retrieval status_filter layer.
+                # Adding it in SQL would silently exclude 'sold_out' and other valid states.
+                "SELECT bp.id, bp.product_name, bp.price, bp.quantity_available, bp.images, bc.name AS category, bc.image AS category_image "
                 "FROM buy_sell_products bp "
                 "LEFT JOIN buy_sell_categories bc ON bp.category_id = bc.id AND bc.deleted_at IS NULL "
-                "LEFT JOIN users u ON bp.seller_id = u.id "
-                "WHERE bp.deleted_at IS NULL AND bp.status = 'active' "
-                "AND (bp.product_name LIKE '%tractor%' OR bp.product_name LIKE '%ટ્રેક્ટર%') "
+                "WHERE bp.deleted_at IS NULL "
+                "AND bp.category_id IN (SELECT id FROM buy_sell_categories WHERE name LIKE '%tractor%' OR name LIKE '%ટ્રેક્ટર%' AND deleted_at IS NULL) "
                 "ORDER BY bp.created_at DESC LIMIT 50",
             ],
             "products": [
-                "SELECT sc.name AS crop, p.min_price, p.max_price, p.price_date, y.name AS yard, c.name AS city "
+                "SELECT sc.name AS crop, sc.img AS crop_img, p.min_price, p.max_price, p.price_date, y.name AS yard, c.name AS city "
                 "FROM products p "
                 "JOIN sub_categories sc ON p.subcategory_id = sc.id "
                 "JOIN yards y ON p.yard_id = y.id "
@@ -369,9 +381,11 @@ class SchemaGenerator:
         }
         if table_name in examples:
             return examples[table_name]
+        safe_columns = safe_columns or ["id"]
+        select_cols = ", ".join(safe_columns[:6])
         if table_name in SOFT_DELETE_TABLES:
-            return [f"SELECT * FROM {table_name} WHERE deleted_at IS NULL LIMIT 10"]
-        return [f"SELECT * FROM {table_name} LIMIT 10"]
+            return [f"SELECT {select_cols} FROM {table_name} WHERE deleted_at IS NULL LIMIT 10"]
+        return [f"SELECT {select_cols} FROM {table_name} WHERE 1=1 LIMIT 10"]
 
     def save_condensed_schema(self, condensed_schema: Dict[str, Any]):
         with open(self.condensed_schema_path, 'w', encoding='utf-8') as f:
@@ -383,55 +397,76 @@ class SchemaGenerator:
         with open(tool_path, 'w', encoding='utf-8') as f:
             json.dump(tool, f, indent=2, ensure_ascii=False)
 
+    def _artifacts_current(self) -> bool:
+        if not os.path.exists(self.condensed_schema_path):
+            return False
+        try:
+            with open(self.condensed_schema_path, "r", encoding="utf-8") as f:
+                condensed = json.load(f)
+            return condensed.get("privacy_policy_hash") == self.privacy_policy.policy_hash
+        except Exception:
+            return False
+
+    def _delete_stale_tools(self, allowed_table_names: set) -> int:
+        deleted = 0
+        for tool_file in Path(self.tools_dir).glob("*_tool.json"):
+            table_name = tool_file.stem.replace("_tool", "")
+            if table_name not in allowed_table_names:
+                try:
+                    tool_file.unlink()
+                    deleted += 1
+                    logger.info(f"Deleted stale/private tool file: {tool_file.name}")
+                except OSError as e:
+                    logger.warning(f"Could not delete stale/private tool file {tool_file}: {e}")
+        return deleted
+
     def generate_all(self, force: bool = False) -> dict:
-        """Generate condensed schema and all tool files. force=True regenerates even if files exist."""
-        stats = {"condensed_schema": "skipped", "tools_generated": 0, "tools_skipped": 0, "total_tables": 0}
-
-        condensed_exists = os.path.exists(self.condensed_schema_path) and not force
-        existing_tools   = list(Path(self.tools_dir).glob("*_tool.json"))
-        tools_exist      = len(existing_tools) > 0 and not force
-
-        if condensed_exists and tools_exist:
-            logger.info(f"⏭️  Condensed schema exists: {self.condensed_schema_path}")
-            logger.info(f"⏭️  Tools exist: {len(existing_tools)} files found")
-            stats["condensed_schema"] = "exists"
-            stats["tools_skipped"]    = len(existing_tools)
-            return stats
+        """Generate sanitized schema and tool files."""
+        stats = {
+            "condensed_schema": "skipped",
+            "tools_generated": 0,
+            "tools_skipped": 0,
+            "tools_deleted": 0,
+            "total_tables": 0,
+            "policy_hash": self.privacy_policy.policy_hash,
+        }
 
         try:
             full_schema = self.load_full_schema()
         except FileNotFoundError:
             logger.warning("⚠️  full_schema.json not found — skipping generation.")
-            if condensed_exists:
+            if os.path.exists(self.condensed_schema_path):
                 stats["condensed_schema"] = "exists"
             return stats
 
-        stats["total_tables"] = full_schema.get("total_tables", 0)
+        allowed_tables = [
+            table for table in full_schema.get("tables", [])
+            if self.privacy_policy.is_queryable_table(table.get("table_name", ""))
+        ]
+        allowed_names = {table.get("table_name") for table in allowed_tables}
+        stats["total_tables"] = len(allowed_tables)
         database_name = full_schema.get("database_name", "unknown")
 
-        if not condensed_exists:
-            condensed = self.generate_condensed_schema(full_schema)
-            self.save_condensed_schema(condensed)
-            stats["condensed_schema"] = "generated"
-        else:
+        existing_tools = list(Path(self.tools_dir).glob("*_tool.json"))
+        if not force and self._artifacts_current() and len(existing_tools) >= len(allowed_tables):
             logger.info(f"⏭️  Condensed schema exists: {self.condensed_schema_path}")
+            stats["tools_deleted"] = self._delete_stale_tools(allowed_names)
             stats["condensed_schema"] = "exists"
+            stats["tools_skipped"] = len(list(Path(self.tools_dir).glob("*_tool.json")))
+            return stats
 
-        if not tools_exist:
-            logger.info("🔧 Generating individual tool files...")
-            for table in full_schema.get("tables", []):
-                table_name = table.get("table_name")
-                tool_path  = os.path.join(self.tools_dir, f"{table_name}_tool.json")
-                if os.path.exists(tool_path) and not force:
-                    stats["tools_skipped"] += 1
-                else:
-                    tool = self.generate_tool_for_table(table, database_name)
-                    self.save_tool(tool, f"{table_name}_tool")
-                    stats["tools_generated"] += 1
-            logger.info(f"✅ Generated {stats['tools_generated']} tool files")
-        else:
-            stats["tools_skipped"] = len(existing_tools)
-            logger.info(f"⏭️  Tools exist: {len(existing_tools)} files skipped")
+        condensed = self.generate_condensed_schema(full_schema)
+        self.save_condensed_schema(condensed)
+        stats["condensed_schema"] = "generated"
+
+        logger.info("Generating sanitized individual tool files...")
+        stats["tools_deleted"] = self._delete_stale_tools(allowed_names)
+        for table in allowed_tables:
+            table_name = table.get("table_name")
+            tool = self.generate_tool_for_table(table, database_name)
+            self.save_tool(tool, f"{table_name}_tool")
+            stats["tools_generated"] += 1
+        logger.info(f"Generated {stats['tools_generated']} sanitized tool files")
 
         logger.info("📊 GENERATION SUMMARY:",
                     condensed=stats["condensed_schema"],
@@ -456,6 +491,9 @@ class SchemaGenerator:
         tools = {}
         for tool_file in Path(self.tools_dir).glob("*_tool.json"):
             table_name = tool_file.stem.replace("_tool", "")
+            if not self.privacy_policy.is_queryable_table(table_name):
+                logger.info(f"Privacy policy ignored tool file at load time: {tool_file.name}")
+                continue
             with open(tool_file, 'r', encoding='utf-8') as f:
                 tools[table_name] = json.load(f)
 
@@ -478,6 +516,8 @@ class SchemaGenerator:
         tools = []
         for tool_file in Path(self.tools_dir).glob("*_tool.json"):
             table_name = tool_file.stem.replace("_tool", "")
+            if not self.privacy_policy.is_queryable_table(table_name):
+                continue
             tools.append(f"query_{table_name}")
         if not tools:
             logger.warning(
@@ -490,16 +530,19 @@ class SchemaGenerator:
 def initialize_schemas(
     schemas_dir: str = "app/schemas",
     tools_dir: str   = "app/schemas/tools",
+    privacy_policy_path: Optional[str] = None,
 ) -> SchemaGenerator:
     """Initialize and generate schemas on application startup."""
     full_schema_path = os.path.join(schemas_dir, "full_schema.json")
-    generator = SchemaGenerator(full_schema_path, schemas_dir, tools_dir)
+    generator = SchemaGenerator(full_schema_path, schemas_dir, tools_dir, privacy_policy_path)
     logger.info("🚀 Initializing schema generator...")
     stats = generator.generate_all(force=False)
     logger.info("📊 GENERATION SUMMARY:")
     logger.info(f"   Condensed: {stats['condensed_schema']}")
     logger.info(f"   Tools Generated: {stats['tools_generated']}")
     logger.info(f"   Tools Skipped: {stats['tools_skipped']}")
+    logger.info(f"   Tools Deleted: {stats.get('tools_deleted', 0)}")
+    logger.info(f"   Privacy Policy: {stats.get('policy_hash', '')}")
     return generator
 
 

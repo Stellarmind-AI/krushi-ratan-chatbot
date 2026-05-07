@@ -1,149 +1,57 @@
 """
-Confirmation Layer (F1) — Confidence-scored, multilingual, keyword-aware.
+Confirmation Layer (F1) — LLM-based multilingual intent classifier.
 
 Handles queries in:
-  - English         (thresher, wheat, kapas bhav)
-  - Romanized Gujarati  (thresar, kapas, ghau bhav)
-  - Gujarati script     (થ્રેસર, ઘઉં, કપાસ ભાવ)
+  - English             (tractor price, I want cow, mango bhav)
+  - Romanized Gujarati  (kevi rite, kapas bhav, mane rotavater joie)
+  - Gujarati script     (ઘઉં ભાવ, ટ્રેક્ટર, ગાય)
 
-THREE behaviours:
+WHY LLM INSTEAD OF KEYWORDS:
+  Keyword/regex matching breaks constantly as user language varies — especially
+  with 7500+ users asking in Gujarati, Romanized Gujarati, and English.
+  A single focused LLM call handles all variations naturally and can reason
+  about domain context (e.g. cow = always buy_sell, never kshop).
 
-1. CONFIDENCE SCORING (>= 80% → bypass F1, inject intent directly)
-   Domain signals scored per language. High-confidence = direct answer.
+THREE BEHAVIOURS (same as before — only the DETECTION mechanism changed):
 
-2. SCENARIO MATCHING (< 80% confidence → pause, show options)
-   Trigger keywords per scenario in all three languages/scripts.
+1. SKIP (None returned)
+   Navigation (how-to, steps, kevi rite), greetings, or general app info.
+   Route agent already handles these correctly — F1 must not intercept.
 
-3. SMART OPTION ORDERING
-   Options ordered by what the query hints at (sell/buy/price/seed).
-   Irrelevant options excluded (e.g. veggie crops don't show seed option).
+2. CONFIRMED INTENT (ConfirmedIntent returned)
+   Query is unambiguous — single clear domain detected with high confidence.
+   Orchestrator skips table selection and uses the pre-confirmed tables.
+
+3. CLARIFICATION REQUEST (ClarificationRequest returned)
+   Query is genuinely ambiguous — 2+ possible domains.
+   User is shown buttons to pick the intended domain.
+
+COST:
+  Single Groq LLM call, max_tokens=80 (~600 tokens total, ~150ms).
+  Same pattern as route_agent — negligible overhead.
+
+IMPORTANT — ASYNC CHANGE:
+  check() is now async. The caller (chat_handler) must await it:
+    result = await confirmation_layer.check(user_query)
 """
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Union
+
 from app.core.logger import get_logger
+from app.services.llm.manager import get_llm_manager
+from app.models.chat_models import LLMMessage
 
 logger = get_logger("confirmation_layer")
 
-CONFIDENCE_THRESHOLD = 0.80
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Navigation / HOW-TO signals — if ANY of these appear, F1 must NOT trigger.
-# These are questions about HOW TO USE the app, not requests for data.
-# Route agent already handles them correctly as NAVIGATION flow.
-# English / Romanized Gujarati / Gujarati script all covered.
-# ─────────────────────────────────────────────────────────────────────────────
-_NAV_SIGNALS: List[str] = [
-    # English — generic how-to
-    "how to", "how do i", "how can i", "step by step", "steps to",
-    "where to find", "where is", "how do", "guide", "tutorial for",
-    "set up", "setup", "configure", "enable", "activate",
-    "what are the steps", "steps for", "process for", "process to",
-    "instructions for", "instructions to", "procedure for",
-    "what steps", "steps to follow", "what to do to",
-    # English — switch role (nav_switch_role)
-    "switch account", "switch role", "role change", "farmer company switch",
-    "change role", "account switch",
-    # English — video creator / upload (nav_video_create, nav_video_upload)
-    "video creator", "create video", "upload video", "video banavu",
-    # English — mobile number (nav_mobile_number_update)
-    "mobile number change", "mobile number update", "change mobile number",
-    "verify mobile", "number verification", "change phone number",
-    # English — customer support (nav_customer_support)
-    "contact support", "customer support", "help and support",
-    "contact us", "helpline", "customer care",
-    # Romanized Gujarati — generic how-to
-    "kevi rite", "kevi reet", "kevi reete", "keva steps",
-    "kyay malse", "kyay che", "shu karvanu", "shikho",
-    "mate shu", "kevi rite karvanu", "kevi rite karu",
-    "kevi rite set", "kevi rite nokhi", "kevi rite muku",
-    "mate kevi", "keva step", "process shu", "kevi rite thay",
-    # Romanized Gujarati — EXPANDED patterns
-    "kem karvu", "kem karvun", "kem karu", "kem kholvu",
-    "kem mukvun", "kem muku", "kem jovu", "kem badlvu",
-    "paglan", "pagla", "steps shu", "rit shu",
-    "track karvu", "cancel karvu", "register karvu",
-    "kyay jovu", "kyay male", "kyay joiye",
-    # Gujarati script — generic how-to (COMPREHENSIVE)
-    "કેવી રીતે", "કઈ રીતે", "કેવી રીત", "સ્ટેપ્સ",
-    "ક્યાં મળશે", "ક્યાં છે", "કેવી રીતે કરવું", "સેટ કરવું",
-    "કેવી રીતે સેટ", "કેવી રીતે ચાલુ", "કેવી રીતે ઉપયોગ",
-    "કેવી રીતે ખરીદ", "કેવી રીતે વેચ", "કેવી રીતે નોંધ",
-    "કેવી રીતે મૂક", "કેવી રીતે ચેક", "કેવી રીતે ઉમેર",
-    "શીખો", "ગાઇડ", "પ્રક્રિયા",
-    # Gujarati script — EXPANDED "how" patterns (કેમ = colloquial "how")
-    "કેમ કરવું", "કેમ કરવો", "કેમ કરવી",
-    "કેમ ખોલવું", "કેમ મૂકવું", "કેમ મૂકવી",
-    "કેમ જોવું", "કેમ બદલવું", "કેમ બનાવવું",
-    # Gujarati script — EXPANDED "steps/method" patterns
-    "પગલાં", "કયા પગલાં", "માટેના પગલાં", "માટેના સ્ટેપ્સ",
-    "રીત શું", "શું રીત", "રીત જણાવો", "રીત બતાવો",
-    "શું કરવું", "શું કરવો", "શું કરવી",
-    "માર્ગદર્શન", "તરીકો", "તરીકા",
-    "અનુસરવા", "અનુસરો",
-    # Gujarati script — EXPANDED "where to see/find" patterns
-    "ક્યાં જોવા", "ક્યાં જોવું", "ક્યાં મળે",
-    "ક્યાં જોવા મળે", "ક્યાં મળશે",
-    "ક્યાંથી", "ક્યાં થી",
-    # Gujarati script — EXPANDED action patterns
-    "ટ્રેક કરવો", "ટ્રેક કરવું",
-    "રદ કરવો", "રદ કરવું", "કેન્સલ કરવો", "કેન્સલ કરવું",
-    "બદલવું", "બદલવી", "બદલવો",
-    "અપડેટ કરવું", "અપડેટ કરવો",
-    # Gujarati script — switch role (nav_switch_role)
-    "ભૂમિકા સ્વિચ", "સ્વિચ એકાઉન્ટ", "ભૂમિકા બદલો",
-    # Gujarati script — video creator / upload (nav_video_create, nav_video_upload)
-    "વિડિઓ ક્રિએટર", "અપલોડ", "વિડિઓ અપલોડ",
-    # Gujarati script — mobile number (nav_mobile_number_update)
-    "મોબાઇલ નંબર બદલો", "નંબર બદલો", "મોબાઇલ અપડેટ",
-    # Gujarati script — customer support (nav_customer_support)
-    "ગ્રાહક સેવા", "સપોર્ટ", "સહાય", "સંપર્ક",
-]
-
-
-def _is_navigation_query(q: str) -> bool:
-    """
-    Returns True if the query is asking HOW TO do something (step-by-step)
-    rather than requesting data or asking how something WORKS (conceptual).
-
-    Anti-nav patterns: if the query also contains words indicating a conceptual
-    question ("how does X work/happen"), return False even if a nav signal
-    matched. These are GENERAL flow questions, not navigation.
-
-    Examples:
-      "કેવી રીતે કરવું" (how to do)                → True  (NAVIGATION)
-      "કેવી રીતે કામ કરે છે" (how does it work)     → False (GENERAL)
-      "કેવી રીતે થાય છે" (how does it happen)       → False (GENERAL)
-      "સંપર્ક કેવી રીતે થાય છે" (how does contact happen) → False (GENERAL)
-      "પ્રક્રિયા કેવી રીતે કામ કરે છે" (how does process work) → False (GENERAL)
-    """
-    has_nav = any(sig in q for sig in _NAV_SIGNALS)
-    if not has_nav:
-        return False
-
-    # Anti-nav: "how does X work/happen" is conceptual, not step-by-step
-    _ANTI_NAV = [
-        # Gujarati script — "works", "happens", "process works"
-        "કામ કરે છે", "કામ કરે", "થાય છે",
-        "પ્રક્રિયા કેવી", "પ્રક્રિયા શું",
-        # English — "how does X work", "how does X happen"
-        "how does", "how is", "process work", "works",
-        # Romanized Gujarati
-        "kaam kare che", "kaam kare", "thay che",
-        "prakriya kevi", "prakriya shu",
-        "process kevi rite kaam",
-    ]
-    if any(anti in q for anti in _ANTI_NAV):
-        return False
-
-    return True
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Data structures
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# Data structures — UNCHANGED (downstream code depends on these)
+# -----------------------------------------------------------------------------
 
 @dataclass
 class ClarificationOption:
@@ -164,25 +72,25 @@ class ClarificationRequest:
 
 @dataclass
 class ConfirmedIntent:
-    """Confidence >= 80% — skip F1 UI, inject intent directly."""
+    """Single clear intent detected — skip F1 UI, inject intent directly."""
     intent_key: str
     confidence: float
     domain:     str
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Intent → table mapping
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# Intent -> table mapping — UNCHANGED
+# -----------------------------------------------------------------------------
 
 INTENT_TO_TABLES: Dict[str, List[str]] = {
-    "crop_price":       ["query_products", "query_sub_categories", "query_yards", "query_cities", "query_weights"],
+    "crop_price":       ["query_products", "query_sub_categories", "query_yards", "query_cities", "query_talukas", "query_weights"],
     "kshop_product":    ["query_kshop_products", "query_kshop_companies", "query_kshop_categories", "query_kshop_weights"],
-    "buy_sell_product": ["query_buy_sell_products", "query_buy_sell_categories", "query_users"],
+    "buy_sell_product": ["query_buy_sell_products", "query_buy_sell_categories"],
     "seed_info":        ["query_seeds", "query_sub_categories"],
-    "local_news":       ["query_news", "query_cities", "query_states"],
-    "video_search":     ["query_video_posts", "query_users", "query_video_categories"],
+    "local_news":       ["query_news", "query_cities", "query_talukas", "query_states"],
+    "video_search":     ["query_video_posts", "query_video_categories"],
     "equipment_kshop":  ["query_kshop_products", "query_kshop_companies", "query_kshop_categories", "query_kshop_weights"],
-    "equipment_used":   ["query_buy_sell_products", "query_buy_sell_categories", "query_users"],
+    "equipment_used":   ["query_buy_sell_products", "query_buy_sell_categories"],
 }
 
 INTENT_TO_PROMPT_NOTE: Dict[str, str] = {
@@ -196,547 +104,536 @@ INTENT_TO_PROMPT_NOTE: Dict[str, str] = {
     "equipment_used":   "User confirmed: USED/SECOND-HAND EQUIPMENT from Buy/Sell. Use only buy_sell tables.",
 }
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Confidence scoring — domain signals in EN + Romanized GU + Gujarati script
-# High = 0.90, Medium = 0.75
-# If best score >= CONFIDENCE_THRESHOLD (0.80) → bypass F1
-# ─────────────────────────────────────────────────────────────────────────────
-
-_DOMAIN_SIGNALS: Dict[str, Dict[str, List[str]]] = {
-    "crop_price": {
-        "high": [
-            # English
-            "bhav", "mandi bhav", "yard bhav", "market price",
-            "aaj nu bhav", "today price", "mandi", "yard price",
-            "ni keemat", "no bhav", "nu bhav", "na bhav",
-            # Gujarati script
-            "ભાવ", "મંડી ભાવ", "ભાવ જોઈએ", "ભાવ બતાઓ", "ભાવ આપો",
-            "આજ નો ભાવ", "આજ નું ભાવ", "મંડી", "ભાવ શું છે",
-            "ભાવ કેટલો", "ભાવ કેટલા", "ભાવ જણાવો",
-        ],
-        "medium": [
-            "price", "keemat", "rate", "mol", "daam",
-            "કિંમત", "રેટ", "ભાવ",
-        ],
-    },
-    "kshop_product": {
-        "high": [
-            "kshop", "k-shop", "k shop", "k-store", "kstore", "k store",
-            "કે-શોપ", "કે શોપ", "કૃષિ શોપ",
-        ],
-        "medium": ["online shop", "online store"],
-    },
-    "buy_sell_product": {
-        "high": [
-            # English / Romanized
-            "buy sell", "buysell", "buy/sell", "marketplace", "for sale",
-            "vechuv", "vecho", "vechan", "sale karvanu", "vecho chhe",
-            "sell my", "sell karvanu",
-            # Gujarati script
-            "વેચવું", "વેચો", "વેચાણ", "ખરીદ-વેચ", "ખરીદ વેચ",
-            "વેચવા", "વેચવું છે", "વેચુ છુ", "વેચવો",
-        ],
-        "medium": ["sale", "sell", "second hand", "used", "વેચ", "ખરીદ"],
-    },
-    "seed_info": {
-        "high": [
-            "seed", "bij", "bia", "variety", "beej", "varieti",
-            "બીજ", "બી", "વેરાઈટી", "જાત", "નાસ",
-        ],
-        "medium": ["nasal", "jat", "નાસ", "જાત"],
-    },
-    "local_news": {
-        "high": [
-            "news", "samachar", "khabar", "akhbar", "latest news",
-            "સમાચાર", "ખબર", "અખબાર", "ન્યૂઝ", "સમાચારો",
-        ],
-        "medium": ["update", "notification", "અપડેટ"],
-    },
-    "video_search": {
-        "high": [
-            "video", "watch", "juo", "tutorial", "farming video", "kheti video",
-            "વિડિઓ", "વીડિઓ", "જુઓ", "વિડીઓ",
-        ],
-        "medium": ["clip", "reel", "ક્લિપ"],
-    },
+_VALID_INTENTS   = set(INTENT_TO_TABLES.keys())
+_VALID_SCENARIOS = {
+    "crop", "equipment", "equipment_price",
+    "animal", "seed", "product", "price", "location",
 }
 
-# Buy / sell / price / seed hints — used for option ordering
-_BUY_HINTS = [
-    "levu", "kharidi", "kharido", "buy", "purchase", "joiye", "joiyu", "levo", "apo",
-    "લેવું", "ખરીદો", "ખરીદી", "ખરીદવું", "જોઈએ", "આપો",
-]
-_SELL_HINTS = [
-    "vechuv", "vecho", "sell", "vechan", "sale", "muku", "mukuv",
-    "વેચવું", "વેચો", "વેચાણ", "વેચ", "મૂકો", "મૂકવું",
-]
-_PRICE_HINTS = [
-    "bhav", "keemat", "rate", "price", "kitno", "ketla", "mol",
-    "ભાવ", "કિંમત", "રેટ", "કેટલો", "કેટલા",
-]
-_SEED_HINTS = [
-    "seed", "bij", "variety", "nasal",
-    "બીજ", "વેરાઈટી", "જાત",
-]
+# ─────────────────────────────────────────────────────────────────────────────
+# Navigation pseudo-intent — used as intent_key on the "How to use the app"
+# button across scenarios. chat_handler intercepts this value and routes the
+# resumed pipeline through _flow_navigation instead of _flow_sql.
+# This is NOT a member of INTENT_TO_TABLES (no SQL tables to confirm).
+# ─────────────────────────────────────────────────────────────────────────────
+NAV_INTENT_KEY = "navigation"
 
 
-def _score_query(q: str) -> Optional[tuple]:
-    """
-    Score query against all domain signals (all languages).
-    Returns (best_intent_key, confidence) if any >= threshold, else None.
-    """
-    scores: Dict[str, float] = {}
-    for intent_key, signals in _DOMAIN_SIGNALS.items():
-        for sig in signals["high"]:
-            if sig in q:
-                scores[intent_key] = max(scores.get(intent_key, 0.0), 0.90)
-        for sig in signals.get("medium", []):
-            if sig in q:
-                scores[intent_key] = max(scores.get(intent_key, 0.0), 0.75)
-    if not scores:
+# -----------------------------------------------------------------------------
+# Option builders — LLM-driven, scenario-only logic.
+#
+# Design principle (per user mandate):
+#   F1 (the LLM) does ALL classification — language detection, intent extraction,
+#   ambiguity resolution. The option builders are now DUMB DISPATCHERS that
+#   emit a fixed, predictable button set per scenario. NO keyword inspection
+#   inside the builders.
+#
+# Scenario → button matrix:
+#   crop             — Nav + Crop price                                   (2)
+#   equipment        — Nav + K-Shop new + Buy/Sell used                   (3)
+#   equipment_price  — K-Shop price + Buy/Sell price (no nav, golden rule)(2)
+#   animal           — Nav + Buy/Sell                                     (2)
+#   seed             — Nav + Seed info                                    (2)
+#   product          — Nav + K-Shop + Buy/Sell + Crop price               (4)
+#   price            — Crop price + K-Shop price + Buy/Sell price          (3)
+#   location         — Nav + News + Crop prices (no buy_sell — no FK)     (3)
+#
+# Golden rule reminder: scenarios containing a price word (price,
+# equipment_price) NEVER show a navigation button. If the user mentions
+# price, they want DB data, not how-to instructions.
+# -----------------------------------------------------------------------------
+
+# Per-scenario navigation button label (User-facing — translated by chat_handler).
+# Empty entries (price, equipment_price) mean "no nav button for this scenario".
+_NAV_LABEL_BY_SCENARIO: Dict[str, str] = {
+    "crop":      "How to view {kw} prices in app",
+    "equipment": "How to buy or list {kw} in app",
+    "animal":    "How to buy or list {kw} in app",
+    "seed":      "How to find seed information in app",
+    "product":   "How to navigate the app",
+    "location":  "How to use the app",
+}
+
+# Per-scenario synthetic question used when user TAPS the navigation button.
+# The original user query is often too vague for answer_navigation() to give
+# a clean answer — we substitute a complete how-to question so the navigation
+# LLM has unambiguous context.
+_NAV_QUERY_BY_SCENARIO: Dict[str, str] = {
+    "crop":      "how do i view {kw} prices in the krushi ratn app",
+    "equipment": "how do i buy or list {kw} in the krushi ratn app",
+    "animal":    "how do i buy or list {kw} in the krushi ratn app",
+    "seed":      "how do i find seed variety information in the krushi ratn app",
+    "product":   "what features does the krushi ratn app have and how do i navigate them",
+    "location":  "how do i use the krushi ratn app",
+}
+
+
+def _nav_option(scenario: str, keyword: str) -> Optional[ClarificationOption]:
+    """Build the navigation button for a scenario, or None if scenario has no nav."""
+    template = _NAV_LABEL_BY_SCENARIO.get(scenario)
+    if not template:
         return None
-    best = max(scores, key=lambda k: scores[k])
-    return (best, scores[best])
+    label = template.format(kw=keyword) if "{kw}" in template and keyword else (
+        template.replace("{kw} ", "").replace(" {kw}", "") if "{kw}" in template else template
+    )
+    return ClarificationOption(label=label, emoji="🧭", intent_key=NAV_INTENT_KEY, domain="navigation")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Trigger keyword lists — EN + Romanized GU + Gujarati script
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Scenario 0 (NEW): Generic "crops" category word — no specific crop named.
-# e.g. "what crops are available", "list of crops", "બધા પાક".
-# Combined with Scenario 1 (specific crop names), ALL crop-related queries
-# short-circuit to crop_price because there's only ONE data source: mandi/yard.
-_GENERIC_CROPS_KEYWORDS: List[str] = [
-    # English
-    "crop", "crops", "all crops", "what crops", "which crops",
-    "list of crops", "list crops", "available crops",
-    # Romanized Gujarati
-    "pak", "pako", "badha pak", "kaya pak", "kayi pak", "kaye pak",
-    "pak ni list", "pak list", "pak uplabdh",
-    # Gujarati script
-    "પાક", "પાકો", "બધા પાક", "કયો પાક", "કયા પાક", "કઈ પાક",
-    "પાક ની યાદી", "પાક યાદી", "ઉપલબ્ધ પાક",
-]
-
-
-# Scenario 1: Crop names
-_CROP_KEYWORDS: List[str] = [
-    # English / Romanized
-    "wheat", "ghau", "gahu",
-    "kapas", "cotton",
-    "bajra", "bajri", "bajro",
-    "jowar", "jwari", "jwar",
-    "corn", "maize", "makai",
-    "magfali", "groundnut", "moongfali",
-    "mung", "moong",
-    "chana", "ghana", "channa",
-    "tal", "sesame",
-    "rice crop", "chaval",
-    "soybean", "soya",
-    "onion", "dungli", "kanda",
-    "garlic", "lasan",
-    "tomato", "tameta",
-    "potato", "bataka",
-    "sugarcane", "sherdio",
-    # Gujarati script
-    "ઘઉં", "ઘઉ",
-    "કપાસ",
-    "બાજરો", "બાજરી",
-    "જુવાર",
-    "મકાઈ",
-    "મગફળી",
-    "મગ",
-    "ચણા",
-    "તલ",
-    "ચોખા", "ડાંગર",
-    "સોયાબીન",
-    "ડુંગળી",
-    "લસણ",
-    "ટામેટા", "ટામેટું",
-    "બટાકા", "બટેટા",
-    "શેરડી",
-    "તુવર", "અડદ", "મઠ",
-]
-
-# Scenario 2: Generic product
-_PRODUCT_KEYWORDS: List[str] = [
-    "product", "products", "item", "items",
-    "vastu", "vasthu",
-    "ઉત્પાદ", "ઉત્પાદન", "વસ્તુ",
-]
-
-# Scenario 3: Price without source
-_PRICE_KEYWORDS: List[str] = [
-    "how much", "kitna", "kitno",
-    "ketla", "ketlu", "mool",
-    "kem malshe", "kya bhav",
-    "કેટલો", "કેટલા", "કેટલું",
-    "કિંમત", "ભાવ",          # standalone without domain context → ambiguous
-    "shuno bhav", "shu bhav",
-]
-
-# Scenario 4: Equipment / machinery
-_EQUIPMENT_KEYWORDS: List[str] = [
-    # English / Romanized
-    "machine", "yantra",
-    "tractor",
-    "pump", "motor pump", "water pump",
-    "sprayer", "duster",
-    "engine", "implement",
-    "harvester", "thresher", "thresar", "thraser",
-    "auger", "cultivator", "planter",
-    "weeder", "seeder",
-    "balwan", "balwaan",
-    # Gujarati script
-    "મશીન", "યંત્ર",
-    "ટ્રેક્ટર",
-    "પંપ", "મોટર પંપ", "વોટર પંપ",
-    "સ્પ્રેયર", "ફ્વારો", "ડસ્ટર",
-    "એન્જિન", "ઈમ્પ્લીમેન્ટ",
-    "થ્રેસર", "થ્રેશર", "હાર્વેસ્ટર",
-    "ઓગર", "કલ્ટીવેટર", "પ્લાન્ટર",
-    "વીડર", "સીડર",
-    "બળવાન",
-]
-
-# Scenario 5: Location
-_LOCATION_KEYWORDS: List[str] = [
-    # English / Romanized
-    "surat", "ahmedabad", "rajkot", "vadodara", "mehsana",
-    "gandhinagar", "anand", "bharuch", "junagadh",
-    "bhavnagar", "jamnagar", "amreli", "navsari", "valsad",
-    "kutch", "morbi", "patan", "sabarkantha", "banaskantha",
-    "nearby", "nazdik", "local",
-    "mara gaon", "mara taluka", "mara jilla",
-    # Gujarati script
-    "સુરત", "અમદાવાદ", "રાજકોટ", "વડોદરા", "મહેસાણા",
-    "ગાંધીનગર", "આણંદ", "ભરૂચ", "જૂનાગઢ",
-    "ભાવનગર", "જામનગર", "અમરેલી", "નવસારી", "વલસાડ",
-    "કચ્છ", "મોરબી", "પાટણ",
-    "નજીક", "સ્થાનિક", "મારા ગામ", "મારા તાલુકા",
-]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Domain availability per crop keyword
-#
-# KEY DESIGN RULE: Only show an option if data ACTUALLY EXISTS in that domain
-# for that crop. This prevents "no data found" responses after the user picks.
-#
-# Domains:
-#   crop_price       → products/mandi table — has prices for ALL major crops
-#   buy_sell_product → buy_sell_products table — farmers list anything for sale
-#   seed_info        → seeds table — only crops where seed varieties are stocked
-#
-# NOTE: kshop_product is NEVER shown for raw crops. K-Shop sells farm
-# EQUIPMENT (tractors, pumps, sprayers) — NOT raw agricultural produce.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Crops that have seed variety data in the seeds table
-# (conservative whitelist — only add if you know data exists)
-_CROPS_WITH_SEED_DATA: set = {
-    "wheat", "ghau", "gahu", "ઘઉં", "ઘઉ",
-    "kapas", "cotton", "કપાસ",           # cotton seeds are stocked
-    "bajra", "bajri", "bajro", "બાજરો", "બાજરી",
-    "jowar", "jwari", "jwar", "જુવાર",
-    "corn", "maize", "makai", "મકાઈ",
-    "mung", "moong", "મગ",
-    "chana", "ghana", "channa", "ચણા",
-    "tal", "sesame", "તલ",
-    "soybean", "soya", "સોયાબીન",
-    "rice crop", "chaval", "ચોખા", "ડાંગર",
-    "magfali", "groundnut", "moongfali", "મગફળી",
-}
-
-# Crops that are ONLY tradeable (no seeds data, no processing equipment)
-# These get only price + buy_sell options
-_CROPS_PRICE_ONLY: set = {
-    "onion", "dungli", "kanda", "ડુંગળી",
-    "tomato", "tameta", "ટામેટા", "ટામેટું",
-    "potato", "bataka", "bateta", "બટાકા", "બટેટા",
-    "garlic", "lasan", "લસણ",
-    "sugarcane", "sherdio", "શેરડી",
-    "tuveral", "tuver", "તુવેર",
-    "adadal", "adad", "અડદ",
-}
-
-
-# Gujarati-script → English key map for _CROPS_WITH_SEED_DATA lookups.
-# Used by the crop short-circuit in ConfirmationLayer.check() and by
-# _build_crop_options below. Shared so both stay in sync.
-_GU_TO_EN_CROPS: Dict[str, str] = {
-    "કપાસ": "kapas", "ઘઉં": "wheat", "ઘઉ": "wheat",
-    "બાજરો": "bajra", "બાજરી": "bajra", "જુવાર": "jowar",
-    "મકાઈ": "corn", "મગ": "mung", "ચણા": "chana",
-    "તલ": "tal", "ચોખા": "chaval", "ડાંગર": "chaval",
-    "સોયાબીન": "soybean", "મગફળી": "magfali",
-    "ડુંગળી": "onion", "ટામેટા": "tomato", "ટામેટું": "tomato",
-    "બટાકા": "potato", "બટેટા": "potato", "લસણ": "lasan",
-    "શેરડી": "sugarcane",
-}
-
-
-def _build_crop_options(kw: str, q: str) -> List[ClarificationOption]:
+def build_navigation_query(scenario: str, keyword: str = "") -> str:
     """
-    Build crop options with only the domains that HAVE data for this keyword.
-    - K-Shop is NEVER shown for crops (K-Shop = equipment, not raw crops)
-    - Seeds only shown if crop is in _CROPS_WITH_SEED_DATA whitelist
-    - Options ordered by what the query context hints at
+    When the user taps the navigation button after F1 paused for clarification,
+    chat_handler calls this to build a complete, navigation-flavored question
+    that answer_navigation() can match against navigation.json screens.
+
+    Example: scenario='equipment', keyword='tractor' →
+             "how do i buy or list tractor in the krushi ratn app"
     """
-    k       = kw.capitalize()
-    kw_low  = kw.lower()
-    has_sell = any(h in q for h in _SELL_HINTS)
-    has_seed = any(h in q for h in _SEED_HINTS)
-
-    # Normalize kw_low to also check English equivalents for Gujarati input
-    # so "કપાસ" resolves seed_data correctly. Uses shared _GU_TO_EN_CROPS map.
-    kw_check = _GU_TO_EN_CROPS.get(kw_low, kw_low)  # map Gujarati → English for set lookups
-
-    # Base options — always available for crops
-    opt_price = ClarificationOption(f"Check {k} mandi price",           "📈", "crop_price",       "crop_price")
-    opt_sell  = ClarificationOption(f"View {k} buy/sell listings",      "📦", "buy_sell_product", "buy_sell")
-
-    # Seed option — only if this crop actually has seed data
-    has_seed_data = kw_low in _CROPS_WITH_SEED_DATA or kw_check in _CROPS_WITH_SEED_DATA
-    opt_seed = ClarificationOption(f"{k} seed variety info", "🌱", "seed_info", "seeds") if has_seed_data else None
-
-    # Price-only crops — don't show seed option
-    if kw_low in _CROPS_PRICE_ONLY or kw_check in _CROPS_PRICE_ONLY:
-        opt_seed = None
-
-    # Build ordered list based on query hints
-    if has_sell:
-        opts = [opt_sell, opt_price]
-        if opt_seed and has_seed:
-            opts.append(opt_seed)
-    elif has_seed and opt_seed:
-        opts = [opt_seed, opt_price, opt_sell]
-    else:
-        # Default: price first (most common query)
-        opts = [opt_price, opt_sell]
-        if opt_seed:
-            opts.append(opt_seed)
-
-    return [o for o in opts if o is not None]
+    template = _NAV_QUERY_BY_SCENARIO.get(scenario, "how do i use the krushi ratn app")
+    if "{kw}" in template:
+        return template.format(kw=keyword) if keyword else template.replace(" {kw}", "").replace("{kw} ", "")
+    return template
 
 
-def _build_product_options(kw: str, q: str) -> List[ClarificationOption]:
-    """Generic product — could be equipment (K-Shop) or marketplace or crop price."""
-    has_sell = any(h in q for h in _SELL_HINTS)
-    has_buy  = any(h in q for h in _BUY_HINTS)
-
-    opt_kshop   = ClarificationOption("K-Shop (new farm equipment & supplies)", "🏪", "kshop_product",    "kshop")
-    opt_buysell = ClarificationOption("Buy/Sell marketplace (farmer listings)",  "🔄", "buy_sell_product", "buy_sell")
-    opt_price   = ClarificationOption("Mandi / yard crop prices",                "📊", "crop_price",       "crop_price")
-    opt_seeds   = ClarificationOption("Crop seeds and varieties",                "🌾", "seed_info",        "seeds")
-
-    if has_sell:
-        return [opt_buysell, opt_price, opt_kshop]
-    if has_buy:
-        return [opt_kshop, opt_buysell, opt_price, opt_seeds]
-    return [opt_kshop, opt_buysell, opt_price, opt_seeds]
-
-
-def _build_price_options(kw: str, q: str) -> List[ClarificationOption]:
-    found_crop = next((c for c in _CROP_KEYWORDS if c in q), None)
-    label_crop = f"{found_crop.capitalize()} price at mandi / yard" if found_crop else "Crop price at mandi / yard"
+def _build_crop_options(kw: str) -> List[ClarificationOption]:
+    """2 buttons: Nav + Crop price. Seed-bearing crops still get 2 buttons —
+    user can ask 'wheat seed' separately for seed info."""
+    k = kw.capitalize() if kw else "Crop"
     return [
-        ClarificationOption(label_crop,               "📊", "crop_price",       "crop_price"),
-        ClarificationOption("K-Shop product price",   "🛒", "kshop_product",    "kshop"),
-        ClarificationOption("Buy/Sell listing price", "💰", "buy_sell_product", "buy_sell"),
+        _nav_option("crop", kw or "crop"),
+        ClarificationOption(f"Check {k} mandi price", "📈", "crop_price", "crop_price"),
     ]
 
 
-def _build_equipment_options(kw: str, q: str) -> List[ClarificationOption]:
-    k = kw.capitalize()
-    has_used = any(h in q for h in ["used", "second hand", "juno", "purano", "old", "જૂનું", "જૂના", "પૂરાણું"])
-    opt_new  = ClarificationOption(f"New {k} from K-Shop",              "🏪", "equipment_kshop", "kshop")
-    opt_used = ClarificationOption(f"Used {k} on Buy/Sell marketplace", "🔄", "equipment_used",  "buy_sell")
-    return [opt_used, opt_new] if has_used else [opt_new, opt_used]
+def _build_equipment_options(kw: str) -> List[ClarificationOption]:
+    """3 buttons: Nav + K-Shop new + Buy/Sell used.
+    User who said 'use motor' / 'new motor' never reaches here — F1 marks those CLEAR."""
+    k = kw.capitalize() if kw else "Equipment"
+    return [
+        _nav_option("equipment", kw or "equipment"),
+        ClarificationOption(f"New {k} from K-Shop",              "🏪", "equipment_kshop", "kshop"),
+        ClarificationOption(f"Used {k} on Buy/Sell marketplace", "🔄", "equipment_used",  "buy_sell"),
+    ]
 
 
-def _build_location_options(kw: str, q: str) -> List[ClarificationOption]:
-    k = kw.capitalize()
-    has_crop = any(c in q for c in _CROP_KEYWORDS)
-    opt_price = ClarificationOption(f"Crop prices near {k}",       "📈", "crop_price",       "crop_price")
-    opt_news  = ClarificationOption(f"Agricultural news from {k}", "📰", "local_news",       "news")
-    opt_sell  = ClarificationOption(f"Buy/Sell listings in {k}",   "🏘️", "buy_sell_product", "buy_sell")
-    return [opt_price, opt_news, opt_sell] if has_crop else [opt_news, opt_price, opt_sell]
+def _build_equipment_price_options(kw: str) -> List[ClarificationOption]:
+    """2 buttons: K-Shop price + Buy/Sell price.
+    NO navigation — golden rule: price word = SQL, never nav."""
+    k = kw.capitalize() if kw else "Equipment"
+    return [
+        ClarificationOption(f"New {k} price (K-Shop)",         "🏪", "equipment_kshop", "kshop"),
+        ClarificationOption(f"Used {k} price (Buy/Sell)",      "🔄", "equipment_used",  "buy_sell"),
+    ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+def _build_animal_options(kw: str) -> List[ClarificationOption]:
+    """2 buttons: Nav + Buy/Sell. Animals only exist in buy_sell_products
+    so there is no SQL ambiguity — the choice is 'how-to' vs 'show listings'."""
+    k = kw.capitalize() if kw else "this animal"
+    return [
+        _nav_option("animal", kw or "animal"),
+        ClarificationOption(f"View {k} listings on Buy/Sell", "🔄", "buy_sell_product", "buy_sell"),
+    ]
+
+
+def _build_seed_options(kw: str) -> List[ClarificationOption]:
+    """2 buttons: Nav + Seed info. Triggered for bare 'seed'/'bij' queries
+    with no specific crop attached."""
+    return [
+        _nav_option("seed", kw),
+        ClarificationOption("Seed varieties available", "🌱", "seed_info", "seeds"),
+    ]
+
+
+def _build_product_options(kw: str) -> List[ClarificationOption]:
+    """4 buttons: Nav + K-Shop + Buy/Sell + Crop price.
+    For generic 'items?' / 'products' / 'vastu' queries — covers the realistic
+    intents without showing every domain."""
+    return [
+        _nav_option("product", kw),
+        ClarificationOption("K-Shop (new farm equipment & supplies)", "🏪", "kshop_product",    "kshop"),
+        ClarificationOption("Buy/Sell marketplace (farmer listings)",  "🔄", "buy_sell_product", "buy_sell"),
+        ClarificationOption("Mandi / yard crop prices",                "📊", "crop_price",       "crop_price"),
+    ]
+
+
+def _build_price_options(kw: str) -> List[ClarificationOption]:
+    """3 buttons: Crop price + K-Shop price + Buy/Sell price.
+    NO navigation — golden rule: price word = SQL, never nav."""
+    label_crop = f"{kw.capitalize()} price at mandi/yard" if kw else "Crop price at mandi/yard"
+    return [
+        ClarificationOption(label_crop,                 "📊", "crop_price",       "crop_price"),
+        ClarificationOption("K-Shop product price",     "🛒", "kshop_product",    "kshop"),
+        ClarificationOption("Buy/Sell listing price",   "💰", "buy_sell_product", "buy_sell"),
+    ]
+
+
+def _build_location_options(kw: str) -> List[ClarificationOption]:
+    """3 buttons: Nav + News + Crop prices.
+    buy_sell_products is excluded — the table has no location columns
+    (no city_id/state_id/taluka_id), so location filtering doesn't apply."""
+    k = kw.capitalize() if kw else "this location"
+    return [
+        _nav_option("location", kw),
+        ClarificationOption(f"Agricultural news from {k}", "📰", "local_news", "news"),
+        ClarificationOption(f"Crop prices near {k}",       "📈", "crop_price", "crop_price"),
+    ]
+
+
+# -----------------------------------------------------------------------------
+# Scenario → question text + builder
+# -----------------------------------------------------------------------------
+
+_SCENARIO_QUESTIONS: Dict[str, str] = {
+    "crop":            "What would you like to know about {keyword}?",
+    "equipment":       "Are you looking for new or used {keyword}?",
+    "equipment_price": "Are you asking the new or used price for {keyword}?",
+    "animal":          "What would you like to do with {keyword}?",
+    "seed":            "What seed information are you looking for?",
+    "product":         "Which section are you looking in?",
+    "price":           "Which price are you asking about?",
+    "location":        "What are you looking for related to '{keyword}'?",
+}
+
+_SCENARIO_BUILDERS = {
+    "crop":            _build_crop_options,
+    "equipment":       _build_equipment_options,
+    "equipment_price": _build_equipment_price_options,
+    "animal":          _build_animal_options,
+    "seed":            _build_seed_options,
+    "product":         _build_product_options,
+    "price":           _build_price_options,
+    "location":        _build_location_options,
+}
+
+
+# -----------------------------------------------------------------------------
+# F1 system prompt — tight, domain-grounded, ~500 tokens
+# -----------------------------------------------------------------------------
+
+_F1_SYSTEM = (
+    "You are F1, the intent pre-classifier for Krushi Ratn — a Gujarati farming marketplace app.\n"
+    "\n"
+    "You understand queries in:\n"
+    "  • English (price, tractor, cow, news, what, how, where)\n"
+    "  • Romanized Gujarati (bhav, kapas, kevi rite, mane joie, kem)\n"
+    "  • Hindi (mujhe, chahiye, naya, kya, kaise)\n"
+    "  • Gujarati script (ભાવ, કપાસ, ઘઉં, નવું, ગાય, કેવી, શું)\n"
+    "\n"
+    "DATABASE DOMAINS:\n"
+    "  • crop_price       — Mandi/yard market prices for crops\n"
+    "                        (wheat/ghau/ઘઉં, cotton/kapas/કપાસ, onion/ડુંગળી, tomato/ટામેટા,\n"
+    "                         potato/બટાકા, mango/કેરી, all vegetables/fruits/grains/pulses)\n"
+    "  • seed_info        — Crop seed varieties (bij/બીજ/બિયારણ)\n"
+    "  • equipment_kshop  — NEW farming equipment from K-Shop store\n"
+    "                        (tractor, pump, sprayer, weeder, thresher, motor, seeder,\n"
+    "                         cultivator, engine, jatka machine, flashlight, tools)\n"
+    "  • equipment_used   — USED/old farming equipment listed by farmers in Buy/Sell\n"
+    "  • buy_sell_product — Marketplace listings: ALL ANIMALS\n"
+    "                        (cow/ગાય, buffalo/ભેંસ, goat/બકરી, horse/ઘોડો, camel/ઊંટ,\n"
+    "                         sheep/ઘેટું, ox/બળદ, bull) + used farmer-listed items\n"
+    "  • kshop_product    — Browsing K-Shop section explicitly\n"
+    "  • local_news       — Agricultural news / samachar / khabar / ખબર\n"
+    "  • video_search     — Educational farming videos / વિડિઓ\n"
+    "\n"
+    "═══════════════════════════════════════════════════════════════════\n"
+    "GOLDEN RULES — APPLY IN ORDER, EARLIER RULE OVERRIDES LATER\n"
+    "═══════════════════════════════════════════════════════════════════\n"
+    "\n"
+    "RULE 1 — PROCESS INTERROGATIVES ALWAYS GO TO NAVIGATION (skip):\n"
+    "  When the user asks HOW to do/find/use/check something, or describes a\n"
+    "  step-by-step process, the intent is navigation. Return {\"decision\":\"skip\"}\n"
+    "  EVEN IF the query also contains a price word, crop name, equipment, or\n"
+    "  any other DB-related word.\n"
+    "\n"
+    "  Process triggers (any of these in the query):\n"
+    "    English:    how to, how do i, how can i, how i, where to, where can i,\n"
+    "                where do i, steps to, process for, way to, guide for\n"
+    "    Romanized:  kevi rite, kem karvu, kem kari, kayi rite, kaise, kevi reete\n"
+    "    Gujarati:   કેવી રીતે, કેમ કરવું, કયા રીતે, કેવી રીત\n"
+    "\n"
+    "  Examples that MUST go to skip:\n"
+    "    \"how i sell wheat\"             -> {\"decision\":\"skip\"} (sell process)\n"
+    "    \"how to view kapas bhav\"       -> {\"decision\":\"skip\"} (process despite bhav)\n"
+    "    \"where can i find onion price\" -> {\"decision\":\"skip\"} (process despite price)\n"
+    "    \"kevi rite pak vechuv\"         -> {\"decision\":\"skip\"} (sell process)\n"
+    "    \"ghau bhav kevi rite jovo\"     -> {\"decision\":\"skip\"} (process despite bhav)\n"
+    "    \"how do i check tractor price\" -> {\"decision\":\"skip\"} (process despite price)\n"
+    "\n"
+    "RULE 2 — SELL/LIST PROCESS ALWAYS GOES TO NAVIGATION (skip):\n"
+    "  Selling/listing crops, animals, equipment, or any product on Krushi Ratn\n"
+    "  ALWAYS requires the app's sell flow. Any sell/list intent — even without\n"
+    "  an explicit \"how\" — is navigation.\n"
+    "\n"
+    "  Sell triggers:\n"
+    "    English:    i want to sell, sell my, list for sale, list my, post for sale\n"
+    "    Romanized:  vechuv, vechan, vechan karvu, listing muku, post karvu\n"
+    "    Gujarati:   વેચવું, વેચાણ, મૂકવું, પોસ્ટ કરવું\n"
+    "\n"
+    "  Examples:\n"
+    "    \"i want to sell wheat\"   -> {\"decision\":\"skip\"}\n"
+    "    \"pak vechuv\"             -> {\"decision\":\"skip\"}\n"
+    "    \"mare cow vechvi che\"    -> {\"decision\":\"skip\"}\n"
+    "    \"list my motor for sale\" -> {\"decision\":\"skip\"}\n"
+    "\n"
+    "RULE 3 — PRICE WORD + INFO QUESTION ALWAYS RESOLVES TO DATA:\n"
+    "  When NO process trigger from RULE 1/RULE 2 is present AND a price word\n"
+    "  is in the query, route to live DB data — never navigation. Even queries\n"
+    "  like \"what is X price\" or \"tell me X bhav\" are info requests, NOT\n"
+    "  process requests.\n"
+    "\n"
+    "  Price words: bhav, keemat, kimat, price, rate, ભાવ, કિંમત\n"
+    "\n"
+    "  Examples:\n"
+    "    \"kapas bhav\"            -> clear:crop_price\n"
+    "    \"what is wheat price\"  -> clear:crop_price (info, not process)\n"
+    "    \"tell me kapas keemat\" -> clear:crop_price\n"
+    "    \"buffalo bhav\"          -> clear:buy_sell_product (animals + price)\n"
+    "    \"tractor bhav\"          -> ambiguous:equipment_price (kshop+buy_sell)\n"
+    "\n"
+    "═══════════════════════════════════════════════════════════════════\n"
+    "CLASSIFICATION RULES (apply after Golden Rules)\n"
+    "═══════════════════════════════════════════════════════════════════\n"
+    "\n"
+    "SKIP — return {\"decision\":\"skip\"}:\n"
+    "  In addition to RULE 1 and RULE 2 above:\n"
+    "  • Generic app concepts: \"what is krushi ratn\", \"is app free\",\n"
+    "    \"app features\", \"what languages\", \"what is yard\" (concept)\n"
+    "  • Greetings only: hello, hi, namaste, kem cho\n"
+    "\n"
+    "CLEAR — return {\"decision\":\"clear\",\"intent\":\"<X>\",\"keyword\":\"<subject>\"}:\n"
+    "  Single unambiguous DB intent. Choose ONE of these intent values:\n"
+    "    crop_price | seed_info | equipment_kshop | equipment_used |\n"
+    "    kshop_product | buy_sell_product | local_news | video_search\n"
+    "\n"
+    "  • Crop name + price word                  -> crop_price\n"
+    "  • Crop name + seed word (seed/bij/બીજ)    -> seed_info\n"
+    "  • Equipment name + NEW signal\n"
+    "      (new, brand new, naya, navu, navi, નવું, નવી, नया)\n"
+    "                                             -> equipment_kshop\n"
+    "  • Equipment name + USED signal\n"
+    "      (use, used, old, second hand, juno, juni, junu, junum, junun, juna,\n"
+    "       purano, purani, jaani, જૂનું, જૂનો, જૂની, जुना, पुराना)\n"
+    "                                             -> equipment_used\n"
+    "  • Animal name + price word\n"
+    "      (animals only exist in buy/sell — price unambiguates)\n"
+    "                                             -> buy_sell_product\n"
+    "  • Explicit kshop/k-shop/k-store/કે-શોપ    -> kshop_product\n"
+    "  • Explicit buy sell/buysell/marketplace/વેચાણ (browsing intent)\n"
+    "                                             -> buy_sell_product\n"
+    "  • news/samachar/khabar/ખબર/ન્યૂઝ           -> local_news\n"
+    "  • video/વિડિઓ/watch                        -> video_search\n"
+    "\n"
+    "AMBIGUOUS — return {\"decision\":\"ambiguous\",\"scenario\":\"<X>\",\"keyword\":\"<subject>\"}:\n"
+    "  Choose ONE of these scenario values:\n"
+    "    crop | equipment | equipment_price | animal | seed |\n"
+    "    product | price | location\n"
+    "\n"
+    "  • Bare crop name with NO price/seed word         -> scenario: crop\n"
+    "  • Bare equipment name with NO new/used/price word -> scenario: equipment\n"
+    "  • Equipment name + price word (no new/used signal) -> scenario: equipment_price\n"
+    "  • Bare animal name with NO price word             -> scenario: animal\n"
+    "  • Bare seed word with NO crop attached            -> scenario: seed\n"
+    "  • Bare price word with NO subject                 -> scenario: price\n"
+    "  • Generic item/product word with NO domain hint   -> scenario: product\n"
+    "  • Bare location name with NO subject              -> scenario: location\n"
+    "\n"
+    "═══════════════════════════════════════════════════════════════════\n"
+    "RESPONSE FORMAT — JSON ONLY, NO MARKDOWN, NO EXPLANATION\n"
+    "═══════════════════════════════════════════════════════════════════\n"
+    "  {\"decision\":\"skip\"}\n"
+    "  {\"decision\":\"clear\",\"intent\":\"<intent>\",\"keyword\":\"<subject>\"}\n"
+    "  {\"decision\":\"ambiguous\",\"scenario\":\"<scenario>\",\"keyword\":\"<subject>\"}\n"
+    "\n"
+    "  keyword: main subject as written in the user query (e.g. tractor, ઘઉં, kapas).\n"
+    "  Use empty string \"\" only when there is no specific subject (e.g. \"video\").\n"
+    "\n"
+    "═══════════════════════════════════════════════════════════════════\n"
+    "EXAMPLES — STUDY THESE CAREFULLY\n"
+    "═══════════════════════════════════════════════════════════════════\n"
+    "\n"
+    "  Process interrogatives — all skip:\n"
+    "    \"how i sell wheat\"             -> {\"decision\":\"skip\"}\n"
+    "    \"how to view kapas bhav\"       -> {\"decision\":\"skip\"}\n"
+    "    \"where can i find onion price\" -> {\"decision\":\"skip\"}\n"
+    "    \"kevi rite pak vechuv\"         -> {\"decision\":\"skip\"}\n"
+    "    \"ghau bhav kevi rite jovo\"     -> {\"decision\":\"skip\"}\n"
+    "    \"how do i register\"             -> {\"decision\":\"skip\"}\n"
+    "    \"kevi rite kshop ma jovu\"      -> {\"decision\":\"skip\"}\n"
+    "\n"
+    "  Sell intent — all skip:\n"
+    "    \"i want to sell wheat\"   -> {\"decision\":\"skip\"}\n"
+    "    \"mare cow vechvi che\"    -> {\"decision\":\"skip\"}\n"
+    "    \"pak vechuv\"             -> {\"decision\":\"skip\"}\n"
+    "\n"
+    "  Crop + price word (info, not process):\n"
+    "    \"kapas bhav\"               -> {\"decision\":\"clear\",\"intent\":\"crop_price\",\"keyword\":\"kapas\"}\n"
+    "    \"wheat price\"              -> {\"decision\":\"clear\",\"intent\":\"crop_price\",\"keyword\":\"wheat\"}\n"
+    "    \"ઘઉં ભાવ\"                  -> {\"decision\":\"clear\",\"intent\":\"crop_price\",\"keyword\":\"ઘઉં\"}\n"
+    "    \"what is mango price\"     -> {\"decision\":\"clear\",\"intent\":\"crop_price\",\"keyword\":\"mango\"}\n"
+    "    \"tell me kapas keemat\"   -> {\"decision\":\"clear\",\"intent\":\"crop_price\",\"keyword\":\"kapas\"}\n"
+    "\n"
+    "  Crop + seed word:\n"
+    "    \"wheat seed\"   -> {\"decision\":\"clear\",\"intent\":\"seed_info\",\"keyword\":\"wheat\"}\n"
+    "    \"ghau bij\"     -> {\"decision\":\"clear\",\"intent\":\"seed_info\",\"keyword\":\"ghau\"}\n"
+    "    \"કપાસ બીજ\"     -> {\"decision\":\"clear\",\"intent\":\"seed_info\",\"keyword\":\"કપાસ\"}\n"
+    "\n"
+    "  Equipment + new signal:\n"
+    "    \"new tractor\"   -> {\"decision\":\"clear\",\"intent\":\"equipment_kshop\",\"keyword\":\"tractor\"}\n"
+    "    \"naya pump\"     -> {\"decision\":\"clear\",\"intent\":\"equipment_kshop\",\"keyword\":\"pump\"}\n"
+    "    \"નવું મોટર\"     -> {\"decision\":\"clear\",\"intent\":\"equipment_kshop\",\"keyword\":\"મોટર\"}\n"
+    "\n"
+    "  Equipment + used signal:\n"
+    "    \"used motor\"          -> {\"decision\":\"clear\",\"intent\":\"equipment_used\",\"keyword\":\"motor\"}\n"
+    "    \"i want use motor\"    -> {\"decision\":\"clear\",\"intent\":\"equipment_used\",\"keyword\":\"motor\"}\n"
+    "    \"juno tractor\"         -> {\"decision\":\"clear\",\"intent\":\"equipment_used\",\"keyword\":\"tractor\"}\n"
+    "    \"second hand sprayer\" -> {\"decision\":\"clear\",\"intent\":\"equipment_used\",\"keyword\":\"sprayer\"}\n"
+    "    \"junum motor\"          -> {\"decision\":\"clear\",\"intent\":\"equipment_used\",\"keyword\":\"motor\"}\n"
+    "\n"
+    "  Animal + price word:\n"
+    "    \"buffalo bhav\" -> {\"decision\":\"clear\",\"intent\":\"buy_sell_product\",\"keyword\":\"buffalo\"}\n"
+    "    \"ગાય ભાવ\"      -> {\"decision\":\"clear\",\"intent\":\"buy_sell_product\",\"keyword\":\"ગાય\"}\n"
+    "\n"
+    "  Bare ambiguous queries:\n"
+    "    \"wheat?\"              -> {\"decision\":\"ambiguous\",\"scenario\":\"crop\",\"keyword\":\"wheat\"}\n"
+    "    \"tell me about onion\" -> {\"decision\":\"ambiguous\",\"scenario\":\"crop\",\"keyword\":\"onion\"}\n"
+    "    \"kapas\"                -> {\"decision\":\"ambiguous\",\"scenario\":\"crop\",\"keyword\":\"kapas\"}\n"
+    "    \"tractor\"              -> {\"decision\":\"ambiguous\",\"scenario\":\"equipment\",\"keyword\":\"tractor\"}\n"
+    "    \"i want motor\"         -> {\"decision\":\"ambiguous\",\"scenario\":\"equipment\",\"keyword\":\"motor\"}\n"
+    "    \"મોટર\"                -> {\"decision\":\"ambiguous\",\"scenario\":\"equipment\",\"keyword\":\"મોટર\"}\n"
+    "    \"tractor bhav\"         -> {\"decision\":\"ambiguous\",\"scenario\":\"equipment_price\",\"keyword\":\"tractor\"}\n"
+    "    \"pump price\"            -> {\"decision\":\"ambiguous\",\"scenario\":\"equipment_price\",\"keyword\":\"pump\"}\n"
+    "    \"cow\"                   -> {\"decision\":\"ambiguous\",\"scenario\":\"animal\",\"keyword\":\"cow\"}\n"
+    "    \"i want cow\"            -> {\"decision\":\"ambiguous\",\"scenario\":\"animal\",\"keyword\":\"cow\"}\n"
+    "    \"ગાય\"                  -> {\"decision\":\"ambiguous\",\"scenario\":\"animal\",\"keyword\":\"ગાય\"}\n"
+    "    \"i want bakri\"         -> {\"decision\":\"ambiguous\",\"scenario\":\"animal\",\"keyword\":\"bakri\"}\n"
+    "    \"seed\"                  -> {\"decision\":\"ambiguous\",\"scenario\":\"seed\",\"keyword\":\"seed\"}\n"
+    "    \"bij\"                   -> {\"decision\":\"ambiguous\",\"scenario\":\"seed\",\"keyword\":\"bij\"}\n"
+    "    \"items?\"                -> {\"decision\":\"ambiguous\",\"scenario\":\"product\",\"keyword\":\"items\"}\n"
+    "    \"products\"              -> {\"decision\":\"ambiguous\",\"scenario\":\"product\",\"keyword\":\"products\"}\n"
+    "    \"bhav?\"                 -> {\"decision\":\"ambiguous\",\"scenario\":\"price\",\"keyword\":\"bhav\"}\n"
+    "    \"keemat\"                -> {\"decision\":\"ambiguous\",\"scenario\":\"price\",\"keyword\":\"keemat\"}\n"
+    "    \"surat\"                 -> {\"decision\":\"ambiguous\",\"scenario\":\"location\",\"keyword\":\"surat\"}\n"
+    "    \"ગોંડલ\"                -> {\"decision\":\"ambiguous\",\"scenario\":\"location\",\"keyword\":\"ગોંડલ\"}\n"
+    "\n"
+    "  Generic skip:\n"
+    "    \"namaste\"             -> {\"decision\":\"skip\"}\n"
+    "    \"what is krushi ratn\" -> {\"decision\":\"skip\"}\n"
+    "    \"is app free\"         -> {\"decision\":\"skip\"}\n"
+    "\n"
+    "  Explicit domain:\n"
+    "    \"samachar\"        -> {\"decision\":\"clear\",\"intent\":\"local_news\",\"keyword\":\"samachar\"}\n"
+    "    \"video\"            -> {\"decision\":\"clear\",\"intent\":\"video_search\",\"keyword\":\"\"}\n"
+    "    \"kshop products\" -> {\"decision\":\"clear\",\"intent\":\"kshop_product\",\"keyword\":\"\"}"
+)
+
+
+# -----------------------------------------------------------------------------
 # Core class
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ConfirmationLayer:
     """
-    Stateless. Call .check(user_query) on every incoming query.
+    LLM-based intent pre-classifier. Stateless. Call: await .check(user_query)
 
     Returns:
-        ConfirmedIntent      — confidence >= 80%, skip F1, inject directly
-        ClarificationRequest — confidence < 80%, show options
-        None                 — no ambiguity, proceed normally
+        ConfirmedIntent      — single clear intent, skip F1 UI, inject directly
+        ClarificationRequest — ambiguous intent, show options to user
+        None                 — navigation/general/greeting, proceed normally
+
+    NOTE: check() is async. Caller must await it:
+        result = await get_confirmation_layer().check(user_query)
     """
 
-    def check(self, user_query: str) -> Optional[Union[ClarificationRequest, ConfirmedIntent]]:
-        # Do NOT lowercase Gujarati script — Gujarati has no case.
-        # Keep original for Gujarati keyword matching, use lower only for English.
-        q_orig  = user_query.strip()
-        q_lower = q_orig.lower()
-        # Combined string for matching — catches both scripts
-        q = q_lower + " " + q_orig
+    def __init__(self):
+        self.llm_manager = get_llm_manager()
 
-        # ── Step 0: Navigation bypass ─────────────────────────────────────
-        # If the query is a HOW-TO / navigation question, F1 must NOT trigger.
-        # The route_agent handles these as NAVIGATION flow correctly.
-        # Examples: "kevi rite set karvanu", "કેવી રીતે સેટ કરવું", "how to enable"
-        if _is_navigation_query(q):
-            logger.info(f"✅ F1 NAV BYPASS — navigation question detected: {user_query[:60]!r}")
-            return None
+    async def check(
+        self, user_query: str
+    ) -> Optional[Union[ClarificationRequest, ConfirmedIntent]]:
 
-        # ── Step 1: Crop short-circuit (runs FIRST for crop queries) ──────
-        # PER PRODUCT RULE: crops only exist in ONE place — mandi/yard prices.
-        # So ANY crop-related query (generic "crops" OR specific crop name)
-        # bypasses F1 and goes straight to crop_price.
-        #
-        # EXCEPTION: if the user mentions "seed" AND the specific crop is in
-        # the _CROPS_WITH_SEED_DATA whitelist, route to seed_info instead.
-        # If seed data is NOT present for that crop (e.g. onion in _CROPS_PRICE_ONLY),
-        # still route to crop_price — do NOT fall into F1 clarification.
-        #
-        # This runs BEFORE confidence scoring so "onion seed" doesn't get
-        # mis-scored as seed_info from the word "seed" alone.
-        import re as _re
+        q_orig = user_query.strip()
 
-        def _word_match(kw: str, text: str) -> bool:
-            # Multi-word phrases: simple substring match.
-            # Single word: Unicode-aware word boundary (handles Gujarati script).
-            if " " in kw:
-                return kw in text
-            return bool(_re.search(
-                r"(?<![a-zA-Zઁ-૿])" + _re.escape(kw) + r"(?![a-zA-Zઁ-૿])",
-                text,
-            ))
-
-        has_seed_word = any(h in q for h in _SEED_HINTS)
-
-        # 1a. Specific crop name (check first — more precise than generic "crops")
-        # Sort longest-first so "rice crop" matches before "rice".
-        for kw in sorted(_CROP_KEYWORDS, key=len, reverse=True):
-            if not _word_match(kw, q):
-                continue
-
-            # Seed override: user said "seed" AND this crop has seed data in DB
-            kw_low   = kw.lower()
-            kw_check = _GU_TO_EN_CROPS.get(kw_low, kw_low)
-            crop_has_seed_data = (
-                kw_low   in _CROPS_WITH_SEED_DATA or
-                kw_check in _CROPS_WITH_SEED_DATA
+        # ── LLM call ──────────────────────────────────────────────────────────
+        try:
+            response = await self.llm_manager.generate(
+                messages=[
+                    LLMMessage(role="system", content=_F1_SYSTEM),
+                    LLMMessage(role="user",   content=q_orig),
+                ],
+                temperature=0.0,
+                max_tokens=80,
             )
-            if has_seed_word and crop_has_seed_data:
-                logger.info(f"✅ F1 CROP→SEED | keyword='{kw}' (has seed data) → seed_info")
-                return ConfirmedIntent(intent_key="seed_info", confidence=1.0, domain="seed_info")
 
-            # Default for all crop queries (including "onion seed" where seed data absent)
-            logger.info(f"✅ F1 CROP→PRICE | keyword='{kw}' → crop_price")
-            return ConfirmedIntent(intent_key="crop_price", confidence=1.0, domain="crop_price")
+            raw = response.content.strip()
+            # Strip markdown fences if the model wraps the response
+            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.DOTALL).strip()
+            result: dict = json.loads(raw)
 
-        # 1b. Generic "crops" category word — no specific crop named.
-        # Always crop_price (can't check seed whitelist without a specific crop).
-        for kw in sorted(_GENERIC_CROPS_KEYWORDS, key=len, reverse=True):
-            if _word_match(kw, q):
-                logger.info(f"✅ F1 GENERIC-CROPS | keyword='{kw}' → crop_price")
-                return ConfirmedIntent(intent_key="crop_price", confidence=1.0, domain="crop_price")
-
-        # ── Step 1c: Mechanism / process query bypass ──────────────────
-        # When the user is asking HOW SOMETHING WORKS conceptually (not asking
-        # for data), let the route agent decide. Without this bypass, words
-        # like "ખરીદ" (buy) and "વેચ" (sell) score high for buy_sell_product
-        # and force SQL flow — but the user is asking about the PROCESS, not
-        # requesting actual listings.
-        #
-        # Indicators: "પ્રક્રિયા" (process), "કામ કરે છે" (works),
-        # "થાય છે" (happens), "how does", "process work"
-        _MECHANISM_SIGNALS = [
-            # Gujarati script
-            "કામ કરે છે", "કામ કરે", "થાય છે",
-            "પ્રક્રિયા કેવી", "પ્રક્રિયા શું",
-            # English
-            "how does", "how is", "process work",
-            # Romanized Gujarati
-            "kaam kare che", "kaam kare", "thay che",
-            "prakriya kevi", "prakriya shu",
-        ]
-        if any(sig in q for sig in _MECHANISM_SIGNALS):
-            logger.info(f"✅ F1 MECHANISM BYPASS — conceptual query, letting route agent decide: {user_query[:60]!r}")
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"F1 JSON parse error: {e!s} | raw={raw!r:.120} — passing through"
+            )
+            return None
+        except Exception as e:
+            logger.warning(f"F1 LLM call failed: {e!s} — passing through")
             return None
 
-        # ── Step 2: Confidence scoring (non-crop, non-mechanism queries) ──
-        scored = _score_query(q)
-        if scored:
-            intent_key, confidence = scored
-            if confidence >= CONFIDENCE_THRESHOLD:
-                logger.info(f"✅ F1 BYPASSED | intent={intent_key} confidence={confidence:.0%}")
-                return ConfirmedIntent(intent_key=intent_key, confidence=confidence, domain=intent_key)
+        # ── Route on decision ─────────────────────────────────────────────────
+        decision = result.get("decision", "skip")
+        keyword  = result.get("keyword", "").strip()
 
-        # ── Step 3: Remaining scenario keyword matching ──────────────────
+        # SKIP — navigation, greeting, general app question
+        if decision == "skip":
+            logger.info(f"F1 SKIP — nav/general/greeting: {q_orig[:60]!r}")
+            return None
 
-        # Scenario 2: Generic product
-        for kw in _PRODUCT_KEYWORDS:
-            if kw in q:
-                logger.info(f"🔔 F1 triggered | scenario=generic_product keyword='{kw}'")
-                return ClarificationRequest(
-                    question="Which section are you looking in?",
-                    options=_build_product_options(kw, q),
-                    scenario="generic_product",
-                    matched_keyword=kw,
-                )
+        # CLEAR — single unambiguous domain
+        if decision == "clear":
+            intent = result.get("intent", "")
+            if intent not in _VALID_INTENTS:
+                logger.warning(f"F1 unknown intent '{intent}' — passing through")
+                return None
+            logger.info(f"F1 CLEAR | intent={intent} keyword={keyword!r}")
+            return ConfirmedIntent(
+                intent_key=intent,
+                confidence=0.92,
+                domain=intent,
+            )
 
-        # Scenario 3: Price without source
-        for kw in _PRICE_KEYWORDS:
-            if kw in q:
-                logger.info(f"🔔 F1 triggered | scenario=price_query keyword='{kw}'")
-                return ClarificationRequest(
-                    question="Which price are you asking about?",
-                    options=_build_price_options(kw, q),
-                    scenario="price_query",
-                    matched_keyword=kw,
-                )
+        # AMBIGUOUS — show clarification buttons
+        if decision == "ambiguous":
+            scenario = result.get("scenario", "product")
+            if scenario not in _VALID_SCENARIOS:
+                logger.warning(f"F1 unknown scenario '{scenario}' — defaulting to product")
+                scenario = "product"
 
-        # Scenario 4: Equipment
-        for kw in _EQUIPMENT_KEYWORDS:
-            if kw in q:
-                logger.info(f"🔔 F1 triggered | scenario=equipment keyword='{kw}'")
-                return ClarificationRequest(
-                    question=f"Are you looking for new or used {kw}?",
-                    options=_build_equipment_options(kw, q),
-                    scenario="equipment_query",
-                    matched_keyword=kw,
-                )
+            logger.info(f"F1 AMBIGUOUS | scenario={scenario} keyword={keyword!r}")
 
-        # Scenario 5: Location
-        for kw in _LOCATION_KEYWORDS:
-            if kw in q:
-                logger.info(f"🔔 F1 triggered | scenario=location keyword='{kw}'")
-                return ClarificationRequest(
-                    question=f"What are you looking for related to '{kw}'?",
-                    options=_build_location_options(kw, q),
-                    scenario="location_query",
-                    matched_keyword=kw,
-                )
+            builder  = _SCENARIO_BUILDERS[scenario]
+            options  = builder(keyword)
+            question = _SCENARIO_QUESTIONS[scenario].format(keyword=keyword or "this")
 
-        logger.info("✅ ConfirmationLayer: no ambiguity — proceeding")
+            if not options:
+                logger.warning(f"F1 no options built for scenario={scenario} — passing through")
+                return None
+
+            return ClarificationRequest(
+                question=question,
+                options=options,
+                scenario=scenario,
+                matched_keyword=keyword,
+            )
+
+        logger.warning(f"F1 unexpected decision='{decision}' — passing through")
         return None
 
-    # ── Helpers ───────────────────────────────────────────────────────────
+    # ── Downstream helpers — UNCHANGED ───────────────────────────────────────
 
     @staticmethod
     def get_confirmed_tables(intent_key: str) -> List[str]:
         tables = INTENT_TO_TABLES.get(intent_key, [])
         if not tables:
-            logger.warning(f"⚠️ Unknown intent_key '{intent_key}'")
+            logger.warning(f"Unknown intent_key '{intent_key}'")
         return tables
 
     @staticmethod
@@ -757,11 +654,12 @@ class ConfirmationLayer:
         }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Singleton
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _instance: Optional[ConfirmationLayer] = None
+
 
 def get_confirmation_layer() -> ConfirmationLayer:
     global _instance

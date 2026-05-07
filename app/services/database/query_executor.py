@@ -10,6 +10,7 @@ from app.core.database import db_manager
 from app.services.database.query_validator import query_validator
 from app.models.chat_models import QueryResult
 from app.core.logger import get_database_logger
+from app.utils.privacy_policy import get_privacy_policy
 
 logger = get_database_logger()
 
@@ -74,20 +75,19 @@ class QueryExecutor:
             
             execution_time = time.time() - start_time
             
-            # Convert results to list of dicts (if not already)
-            rows = list(results) if results else []
+            # Convert results to list of dicts, then sanitize before logs,
+            # answer generation, or API responses can see them.
+            raw_rows = list(results) if results else []
+            rows = get_privacy_policy().sanitize_rows(raw_rows)
 
-            # 🔥 NEW — Log actual DB result payload (LLM input data)
+            # Log only safe metadata, never raw DB payload values.
             try:
-                preview_rows = rows[:5]  # limit preview for safety
-                
                 logger.info(
-                    "🧠 DB RESULT PAYLOAD",
+                    "DB RESULT METADATA",
                     extra={
                         "table": table_name,
                         "row_count": len(rows),
                         "execution_time": round(execution_time, 3),
-                        "preview": preview_rows,
                         "columns": list(rows[0].keys()) if rows else [],
                     }
                 )

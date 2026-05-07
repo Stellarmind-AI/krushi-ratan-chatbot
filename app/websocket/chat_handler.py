@@ -25,7 +25,10 @@ from app.models.chat_models import ChatHistory, ChatMessage
 from app.services.agent.orchestrator import get_orchestrator
 from app.services.language_processor import get_language_processor
 from app.services.translation_service import translate_to_user_language, translate_list_to_user_language
-from app.services.agent.confirmation_layer import get_confirmation_layer, ConfirmedIntent, _is_navigation_query
+from app.services.agent.confirmation_layer import (
+    get_confirmation_layer, ConfirmedIntent,
+    NAV_INTENT_KEY, build_navigation_query,
+)
 
 logger       = get_websocket_logger()
 pipeline_log = get_logger("pipeline")
@@ -135,18 +138,44 @@ class ChatHandler:
 
         original_query = pending["query"]
         lang_type      = pending["lang_type"]
+        keyword_hint   = pending.get("keyword_hint", "")
+        scenario       = pending.get("scenario", "")
 
+        # ── Navigation pick — route to NAVIGATION flow, not SQL ─────────────
+        # When the user taps the "How to ... in app" button, intent_key is
+        # NAV_INTENT_KEY. The original query (e.g. "tractor") is too vague
+        # for answer_navigation() — we substitute a complete how-to question
+        # built from scenario + keyword so the navigation LLM has clear context.
+        # force_navigation=True bypasses both F1 (already resolved) and the
+        # route agent, going straight to _flow_navigation in the orchestrator.
+        if intent_key == NAV_INTENT_KEY:
+            synthetic_q = build_navigation_query(scenario, keyword_hint)
+            logger.info(
+                "F1 NAVIGATION PICKED",
+                session_id=session_id,
+                scenario=scenario,
+                original_query=original_query[:60],
+                synthetic_query=synthetic_q[:80],
+            )
+            await self._run_pipeline(
+                ws,
+                synthetic_q,
+                session_id,
+                client_id,
+                confirmed_intent=None,
+                lang_type_override=lang_type,
+                keyword_hint="",
+                force_navigation=True,
+            )
+            return
+
+        # ── SQL intent pick — resume orchestrator with confirmed intent ─────
         logger.info(
             "F1 CLARIFICATION RESOLVED",
             session_id=session_id,
             intent_key=intent_key,
             original_query=original_query[:80],
         )
-
-        keyword_hint = pending.get("keyword_hint", "")
-
-        # Resume the pipeline — pass confirmed_intent and keyword_hint so
-        # orchestrator skips tool-selection and SQL is targeted to the keyword.
         await self._run_pipeline(
             ws,
             original_query,
@@ -176,6 +205,7 @@ class ChatHandler:
         confirmed_intent: Optional[str] = None,   # F1: set after user picks clarification option
         lang_type_override: Optional[str] = None, # F1: reuse detected lang from paused query
         keyword_hint: str = "",                   # F1: the matched keyword (e.g. "kapas") for SQL accuracy
+        force_navigation: bool = False,           # F1: set when user picked the "navigation" button
     ):
         """
         Full pipeline:
@@ -212,7 +242,7 @@ class ChatHandler:
         #   None                 → no ambiguity, proceed normally
         _sql_enabled = settings.is_sql_enabled
         if not confirmed_intent and _sql_enabled:
-            f1_result = self.confirmation_layer.check(processed_text)
+            f1_result = await self.confirmation_layer.check(processed_text)
 
             if isinstance(f1_result, ConfirmedIntent):
                 # High-confidence intent — skip F1 UI, inject directly into pipeline
@@ -231,6 +261,7 @@ class ChatHandler:
                     "query":          processed_text,
                     "lang_type":      lang_type,
                     "keyword_hint":   clarification.matched_keyword,
+                    "scenario":       clarification.scenario,
                 }
                 logger.info(
                     "F1 PIPELINE PAUSED",
@@ -252,18 +283,14 @@ class ChatHandler:
                 await ws.send_text(json.dumps(payload, ensure_ascii=False))
                 return  # ← pipeline paused; resumes via _handle_clarification_response
 
-        # ── Detect navigation signal for route override ────────────────────
-        # F1 nav bypass catches navigation patterns (કેવી રીતે, પગલાં, steps, etc.)
-        # but only prevents F1 from injecting confirmed_intent — it does NOT
-        # tell the route agent anything. The route agent can still mis-classify
-        # as SQL (e.g. "મારા ઓર્ડર ક્યાં છે?" sounds like order data lookup).
-        # Fix: when F1 detects nav signals, force NAVIGATION flow in orchestrator.
-        force_navigation = False
-        if not confirmed_intent:
-            q_check = processed_text.lower() + " " + processed_text
-            if _is_navigation_query(q_check):
-                force_navigation = True
-                print(f"  🧭 NAV SIGNAL DETECTED — will force NAVIGATION flow", flush=True)
+        # ── Navigation routing ───────────────────────────────────────────────
+        # The LLM-based F1 (confirmation_layer) already returns None (skip) for
+        # all navigation queries — the route agent then classifies them correctly
+        # as NAVIGATION without any keyword override needed here.
+        # The exception is the "navigation" clarification button: when the user
+        # taps it, _handle_clarification_response calls _run_pipeline with
+        # force_navigation=True, which is honored by passing it through to the
+        # orchestrator below.
 
         # ── Step 2: Orchestrator → English answer ────────────────────────────
         with Timer() as t:

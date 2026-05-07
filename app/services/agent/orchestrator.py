@@ -21,20 +21,59 @@ import time
 from typing import List, Dict, Any, Optional
 
 from app.services.agent.route_agent    import get_route_agent, FlowType
-from app.services.agent.query_cache    import get_query_cache, STRIP_WORDS
+from app.services.agent.query_cache    import get_query_cache, strip_fillers, is_filler_token
 from app.services.agent.intent_router  import get_intent_router
 from app.services.agent.tool_selector  import get_tool_selector, build_fk_deps_from_tools
 from app.services.agent.answer_generator import get_answer_generator
 from app.services.agent.knowledge_handler import get_knowledge_handler
 from app.services.agent.status_filter     import filter_query_results
 from app.services.database.query_executor import get_query_executor
+from app.services.database.query_validator import query_validator
 from app.utils.schema_generator        import SchemaGenerator
+from app.utils.privacy_policy          import get_privacy_policy
 from app.services.llm.manager          import get_llm_manager
 from app.models.chat_models            import LLMMessage
 from app.core.logger                   import get_agent_logger, Timer
 from app.core.config                   import settings
 
 logger = get_agent_logger()
+
+
+# ── Keyword variant map (built once, used by SQL generation) ──────────────────
+# Maps a keyword (EN, Romanized, or Gujarati) → all search variants.
+# Used when F1 Confirmation Layer provides a keyword_hint.
+_KV_BASE: Dict[str, list] = {
+    "kapas":      ["kapas", "cotton", "કપાસ"],
+    "wheat":      ["wheat", "ghau", "gahu", "ઘઉં", "ઘઉ"],
+    "bajra":      ["bajra", "bajri", "bajro", "બાજરો", "બાજરી"],
+    "magfali":    ["magfali", "groundnut", "moongfali", "મગફળી"],
+    "onion":      ["onion", "dungli", "kanda", "ડુંગળી"],
+    "tomato":     ["tomato", "tameta", "ટામેટા", "ટામેટું"],
+    "potato":     ["potato", "bataka", "bateta", "બટાકા", "બટેટા"],
+    "garlic":     ["garlic", "lasan", "લસણ"],
+    "chana":      ["chana", "ghana", "channa", "ચણા"],
+    "mung":       ["mung", "moong", "મગ"],
+    "jowar":      ["jowar", "jwari", "jwar", "જુવાર"],
+    "corn":       ["corn", "maize", "makai", "મકાઈ"],
+    "soybean":    ["soybean", "soya", "સોયાબીન"],
+    "tal":        ["tal", "sesame", "તલ"],
+    "chaval":     ["chaval", "rice", "ચોખા", "ડાંગર"],
+    "sugarcane":  ["sugarcane", "sherdio", "શેરડી"],
+    "tractor":    ["tractor", "ટ્રેક્ટર"],
+    "pump":       ["pump", "motor pump", "water pump", "પંપ", "મોટર પંપ"],
+    "thresher":   ["thresher", "thresar", "thraser", "થ્રેસર", "થ્રેશર"],
+    "thresar":    ["thresher", "thresar", "thraser", "થ્રેસર", "થ્રેશર"],
+    "sprayer":    ["sprayer", "duster", "સ્પ્રેયર", "ફ્વારો"],
+    "weeder":     ["weeder", "power weeder", "વીડર"],
+    "seeder":     ["seeder", "planter", "સીડર"],
+}
+# Expand: Gujarati script keys point to the same variant lists
+KEYWORD_VARIANTS: Dict[str, list] = {}
+for _en_key, _var_list in _KV_BASE.items():
+    KEYWORD_VARIANTS[_en_key] = _var_list
+    for _v in _var_list:
+        if _v not in KEYWORD_VARIANTS:
+            KEYWORD_VARIANTS[_v] = _var_list
 
 
 class Orchestrator:
@@ -55,6 +94,7 @@ class Orchestrator:
         self.knowledge_handler = get_knowledge_handler()
         self.query_executor    = get_query_executor()
         self.llm_manager       = get_llm_manager()
+        self.privacy_policy    = get_privacy_policy()
 
         # Schema data
         self.condensed_schema: dict = {}
@@ -107,6 +147,9 @@ class Orchestrator:
 
             # Build explicit SQL JOIN clauses from each relationship.
             # "references" is of the form "<ref_table>.<ref_col>".
+            # We also annotate each JOIN line with any img/image/images columns
+            # present in the referenced table so the LLM knows deterministically
+            # which image columns are available on each JOIN target — no guessing.
             rels = tool.get("relationships", [])
             join_lines: List[str] = []
             for r in rels:
@@ -116,14 +159,25 @@ class Orchestrator:
                     continue
                 ref_table, ref_col = ref.split(".", 1)
                 join_kw = r.get("join_type", "JOIN")
+                # Look up image columns on the referenced table
+                ref_tool = (self.all_tools or {}).get(ref_table, {})
+                ref_img_cols = [
+                    c["name"] for c in ref_tool.get("columns", [])
+                    if c["name"] in ("img", "image", "images")
+                ]
+                img_note = (
+                    f"  -- img cols: {', '.join(ref_img_cols)}"
+                    if ref_img_cols else ""
+                )
                 join_lines.append(
-                    f"    {join_kw} {ref_table} ON {tname}.{col} = {ref_table}.{ref_col}"
+                    f"    {join_kw} {ref_table} ON {tname}.{col} = {ref_table}.{ref_col}{img_note}"
                 )
             joins_block = "\n".join(join_lines) if join_lines else "    (no foreign keys)"
 
             notes = [
                 n for n in tool.get("notes", [])
-                if "deleted_at" in n or "status" in n or "STRIP" in n or "keyword" in n.lower()
+                if "deleted_at" in n or "status" in n or "STRIP" in n
+                   or "keyword" in n.lower() or "location" in n.lower()
             ]
             note_str = " | ".join(notes) if notes else ""
 
@@ -349,6 +403,7 @@ class Orchestrator:
             from app.services.agent.confirmation_layer import get_confirmation_layer
             _cl = get_confirmation_layer()
             f1_injected_tools = _cl.get_confirmed_tables(confirmed_intent)
+            f1_injected_tools = self.privacy_policy.filter_tool_names(f1_injected_tools)
             intent_note       = _cl.get_intent_note(confirmed_intent)
             if f1_injected_tools:
                 logger.info(
@@ -366,6 +421,17 @@ class Orchestrator:
         cached = self.query_cache.get(query)
         if cached:
             queries, selected_tools = cached
+            selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
+            all_valid, validation_errors = query_validator.validate_batch([q.get("sql", "") for q in queries])
+            if not selected_tools or not all_valid:
+                logger.warning(
+                    f"Privacy policy rejected cached SQL; invalidating cache | "
+                    f"errors={validation_errors}"
+                )
+                self.query_cache.invalidate(query)
+                cached = None
+
+        if cached:
             logger.cache_hit(query, selected_tools)
             stats = self.query_cache.stats
             logger.info(f"📊 Cache: {stats['hit_rate_percent']}% hit rate | "
@@ -401,6 +467,7 @@ class Orchestrator:
                 routed = self.intent_router.route(query)
             if routed:
                 selected_tools, rule_name = routed
+                selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
                 logger.intent_routed(rule_name, selected_tools)
                 logger.step_done("STEP 3 / INTENT ROUTER", t.elapsed_ms,
                                  rule=rule_name, tables=str(selected_tools))
@@ -415,6 +482,7 @@ class Orchestrator:
             available = self.schema_generator.get_available_tool_names()
             if not available and self._virtual_tools:
                 available = [f"query_{t}" for t in sorted(self._virtual_tools.keys())]
+            available = self.privacy_policy.filter_tool_names(available)
 
             with Timer() as t:
                 tool_resp = await self.tool_selector.select_tools(
@@ -423,6 +491,7 @@ class Orchestrator:
                     available_tools=available,
                 )
             selected_tools = tool_resp.selected_tools
+            selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
             logger.step_done("STEP 4 / TOOL SELECTION", t.elapsed_ms,
                              tools=str(selected_tools))
             logger.tool_selection(selected_tools, query)
@@ -431,6 +500,7 @@ class Orchestrator:
                 logger.warning("Tool selection returned nothing — relaxed retry")
                 with Timer() as t2:
                     selected_tools = await self._select_tools_relaxed(query, available)
+                    selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
                 logger.step_done("STEP 4 / TOOL SELECTION RELAXED", t2.elapsed_ms,
                                  tools=str(selected_tools))
                 if not selected_tools:
@@ -526,6 +596,7 @@ class Orchestrator:
           LLM only sees filtered rows. Frontend receives both.
         """
         # ── Status filter (post-SQL, pre-LLM) ───────────────────────────────
+        query_results = self.privacy_policy.sanitize_query_results(query_results)
         logger.step("STEP 7a / STATUS FILTER", f"{len(query_results)} result sets")
         filtered_results, any_filtered = filter_query_results(query_results)
         if any_filtered:
@@ -566,7 +637,8 @@ class Orchestrator:
 
     async def _generate_sql_compact(self, query: str, selected_tools: List[str], keyword_hint: str = "", intent_note: str = "") -> List[Dict]:
         """Generate SQL using pre-compiled compact schemas. ~60% fewer tokens than full schema."""
-        available = set(self.schema_generator.get_available_tool_names())
+        available = set(self.privacy_policy.filter_tool_names(self.schema_generator.get_available_tool_names()))
+        selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
         schema_lines = []
         for tool_name in selected_tools:
             if tool_name not in available:
@@ -583,58 +655,86 @@ class Orchestrator:
 
         compact_schema = "\n".join(schema_lines)
 
-        # Build keyword hint block — injected into prompt when F1 resolved the intent
-        # This tells the SQL generator EXACTLY what to search for, preventing it from
-        # guessing the keyword from an ambiguous short query like "kapas" or "ઘઉં".
-        keyword_hint_block = ""
+        # Inject example queries for specific tables so the LLM has a concrete
+        # reference for both category-subquery filtering and correct img column usage.
+        # These examples are stored in the tool JSON but NOT in _compiled_schemas.
+        # "products" is included here so the LLM sees sc.img AS crop_img in context.
+        _TABLES_WITH_INJECTED_EXAMPLES = {"buy_sell_products", "kshop_products", "products"}
+        example_lines: List[str] = []
+        for tool_name in selected_tools:
+            table = tool_name.replace("query_", "")
+            if table not in _TABLES_WITH_INJECTED_EXAMPLES:
+                continue
+            try:
+                tool_json = self.schema_generator.load_tool(table)
+                examples = tool_json.get("example_queries", [])
+                if examples:
+                    example_lines.append(f"\nEXAMPLE QUERY for {table} (use category subquery — DO NOT deviate):")
+                    for ex in examples[:1]:   # one example is enough
+                        example_lines.append(f"  {ex}")
+            except Exception:
+                pass
+        if example_lines:
+            compact_schema += "\n" + "\n".join(example_lines) + "\n"
+
+        # Build keyword hint block.
+        #
+        # Two paths:
+        #   (1) F1 keyword_hint set  → use that one keyword's variants (F1 already
+        #       resolved the ambiguity, we trust it).
+        #   (2) F1 keyword_hint not set → AUTO-DETECT every keyword in the query
+        #       against the KEYWORD_VARIANTS map and inject ALL their variants.
+        #
+        # Why (2) exists:
+        # Without an authoritative variant list, the LLM fills in Gujarati
+        # translations from its own training and picks the wrong language —
+        # e.g. Hindi 'કાંદા' for onion when the DB stores Gujarati 'ડુંગળી'.
+        # Auto-detection closes that guessing surface whenever the query names
+        # a keyword we've curated variants for.
+        # Only inject a KEYWORD SEARCH VARIANTS section when we have an
+        # AUTHORITATIVE curated variant list (from _KV_BASE). Otherwise leave
+        # it out so the LLM falls through to rule 4(b) and generates Gujarati
+        # script translation itself.
+        #
+        # Why this matters: previously we injected `[keyword_hint]` even when
+        # the keyword wasn't in _KV_BASE — that single-element section combined
+        # with rule 4(a) ("use ONLY listed variants") trapped the LLM into
+        # English-only LIKE clauses, missing all Gujarati DB rows.
+        # See: user-reported "i want use motor" / "i want motore" failures.
+        hint_pairs: List[tuple] = []
         if keyword_hint:
-            # Build all search variants: original + common transliterations
-            # Canonical keyword → all search variants (EN + Romanized + Gujarati script)
-            # ALSO includes Gujarati script as direct keys so Gujarati input resolves correctly
-            _KV_BASE = {
-                "kapas":      ["kapas", "cotton", "કપાસ"],
-                "wheat":      ["wheat", "ghau", "gahu", "ઘઉં", "ઘઉ"],
-                "bajra":      ["bajra", "bajri", "bajro", "બાજરો", "બાજરી"],
-                "magfali":    ["magfali", "groundnut", "moongfali", "મગફળી"],
-                "onion":      ["onion", "dungli", "kanda", "ડુંગળી"],
-                "tomato":     ["tomato", "tameta", "ટામેટા", "ટામેટું"],
-                "potato":     ["potato", "bataka", "bateta", "બટાકા", "બટેટા"],
-                "garlic":     ["garlic", "lasan", "લસણ"],
-                "chana":      ["chana", "ghana", "channa", "ચણા"],
-                "mung":       ["mung", "moong", "મગ"],
-                "jowar":      ["jowar", "jwari", "jwar", "જુવાર"],
-                "corn":       ["corn", "maize", "makai", "મકાઈ"],
-                "soybean":    ["soybean", "soya", "સોયાબીન"],
-                "tal":        ["tal", "sesame", "તલ"],
-                "chaval":     ["chaval", "rice", "ચોખા", "ડાંગર"],
-                "sugarcane":  ["sugarcane", "sherdio", "શેરડી"],
-                "tractor":    ["tractor", "ટ્રેક્ટર"],
-                "pump":       ["pump", "motor pump", "water pump", "પંપ", "મોટર પંપ"],
-                "thresher":   ["thresher", "thresar", "thraser", "થ્રેસર", "થ્રેશર"],
-                "thresar":    ["thresher", "thresar", "thraser", "થ્રેસર", "થ્રેશર"],
-                "sprayer":    ["sprayer", "duster", "સ્પ્રેયર", "ફ્વારો"],
-                "weeder":     ["weeder", "power weeder", "વીડર"],
-                "seeder":     ["seeder", "planter", "સીડર"],
-            }
-            # Add Gujarati script keys pointing to same variants (so "કપાસ" resolves correctly)
-            _KEYWORD_VARIANTS = {}
-            for en_key, var_list in _KV_BASE.items():
-                _KEYWORD_VARIANTS[en_key] = var_list
-                for v in var_list:
-                    if v not in _KEYWORD_VARIANTS:
-                        _KEYWORD_VARIANTS[v] = var_list
-            variants = _KEYWORD_VARIANTS.get(keyword_hint.lower(),
-                       _KEYWORD_VARIANTS.get(keyword_hint, [keyword_hint]))
-            variants_sql = " OR ".join(
-                f"<column> LIKE '%{v}%'" for v in variants
+            variants = (KEYWORD_VARIANTS.get(keyword_hint.lower())
+                        or KEYWORD_VARIANTS.get(keyword_hint))
+            if variants:
+                hint_pairs.append((keyword_hint, list(variants)))
+            # else: no curated variants → skip section, rule 4(b) handles translation
+        else:
+            hint_pairs = self._detect_keywords_in_query(query)
+
+        keyword_hint_block = ""
+        if hint_pairs:
+            source = "user clarification" if keyword_hint else "auto-detected from query"
+            lines = [
+                "",
+                f"KEYWORD SEARCH VARIANTS ({source}) — USE EXACTLY THESE, DO NOT INVENT OTHERS:",
+            ]
+            for matched, variants in hint_pairs:
+                variants_sql = " OR ".join(f"<column> LIKE '%{v}%'" for v in variants)
+                lines.append(f"  '{matched}' → {variants}")
+                lines.append(f"    SQL form: {variants_sql}")
+            lines.append(
+                "  Rules: apply these LIKE variants as follows:\n"
+                "    • For buy_sell_products: filter via category subquery — "
+                "bp.category_id IN (SELECT id FROM buy_sell_categories WHERE name LIKE '%variant%' OR ... AND deleted_at IS NULL)\n"
+                "    • For kshop_products: filter via category subquery — "
+                "kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE name LIKE '%variant%' OR ... AND deleted_at IS NULL)\n"
+                "    • For all other tables (news, video_posts, etc.): apply LIKE to the relevant name/title column directly."
             )
-            keyword_hint_block = (
-                f"\nKEYWORD HINT (from user clarification):\n"
-                f"  The user is asking about: {keyword_hint!r}\n"
-                f"  Search variants to use: {variants}\n"
-                f"  Use LIKE with OR across all variants — e.g.: {variants_sql}\n"
-                f"  Apply this search to the relevant name/title/product column.\n"
+            lines.append(
+                "  Do NOT translate keywords into Hindi, Marathi, or any other script — "
+                "use ONLY the variants listed above."
             )
+            keyword_hint_block = "\n".join(lines) + "\n"
 
         # Build intent note block — tells SQL generator exactly what domain to query
         intent_note_block = ""
@@ -647,7 +747,23 @@ TABLES:
 {compact_schema}{intent_note_block}{keyword_hint_block}
 
 RULES:
-0. ENUMERATION QUERIES — CHECK FIRST: If the user is asking for the LIST / SET of
+0. SQL FORMATTING — CRITICAL (BOTH RULES MANDATORY):
+   a) SINGLE-LINE SQL — The entire SQL value MUST be ONE continuous string:
+      • Write ALL clauses on a single line separated by spaces (SELECT ... FROM ... WHERE ...)
+      • NEVER put a literal newline inside a JSON string value — it makes JSON invalid
+      • NEVER use backslash (\\\\) at end of line — not valid in JSON or MySQL
+      • NEVER use + to concatenate SQL string pieces — not valid JSON
+      • INCORRECT: "sql": "SELECT col\\\\\n  FROM t"  or  "SELECT col " + "FROM t"
+      • CORRECT:   "sql": "SELECT p.id, p.name FROM products p JOIN sub_categories sc ON p.subcategory_id = sc.id WHERE p.deleted_at IS NULL"
+   b) TABLE QUALIFICATION — ALWAYS prefix SELECT columns with table name or alias:
+      • When query has JOINs, EVERY column in SELECT must include its table name or alias
+      • INCORRECT: SELECT id, title, description FROM news JOIN states ... (bare column names)
+      • CORRECT:   SELECT news.id, news.title, news.description FROM news JOIN states ... (qualified)
+      • Use table aliases for brevity: SELECT n.id, n.title, s.name FROM news n JOIN states s ...
+      • This prevents MySQL ambiguity errors when the same column exists in multiple tables
+      • Exception: aggregate functions like COUNT(*), SUM(col) can stay unqualified if column is unique
+      
+1. ENUMERATION QUERIES — CHECK FIRST: If the user is asking for the LIST / SET of
    items the app tracks in a category (NOT a specific item by name), use SELECT DISTINCT
    on the descriptive name column with NO keyword LIKE filter on the category word.
    Trigger phrases: "list all X", "show all X", "show list of X", "what X are available",
@@ -678,14 +794,63 @@ RULES:
        FROM cities c
        WHERE c.deleted_at IS NULL
        ORDER BY c.name ASC LIMIT 100;
-   This rule OVERRIDES rules 2 and 3 for enumeration queries — those rules apply only
+   This rule OVERRIDES rules 3 and 4 for enumeration queries — those rules apply only
    when the user names a SPECIFIC item (e.g. "kapas bhav", "balwan weeder price").
-1. Strip intent words before extracting product keywords:
+2. Strip intent words before extracting product keywords:
    intent words = mare, maro, karvu, karu, che, purchase, from, kshop, levu, joiye, apo, batao, please
-2. Search each keyword INDEPENDENTLY with OR — never use full phrase LIKE
-3. For product names: search both English and Gujarati script
-   Examples: balwan+બલવાન, weeder+વીડર, kapas+કપાસ, pump+પંપ
-4. JOINS — MANDATORY: for every primary table that has entries under its JOINS block,
+3. Search each keyword INDEPENDENTLY with OR — never use full phrase LIKE
+4. PRODUCT / CROP / EQUIPMENT KEYWORDS — MULTILINGUAL SEARCH (CRITICAL):
+   The database stores text in BOTH Gujarati script (PRIMARY) AND English/Romanized.
+   Every keyword search MUST cover both forms or rows will silently be missed.
+
+   a) AUTHORITATIVE OVERRIDE — if a "KEYWORD SEARCH VARIANTS" section is present
+      above, use ONLY the variants listed there. Do NOT add your own translations.
+      Example: section shows "'onion' → ['onion', 'dungli', 'kanda', 'ડુંગળી']" —
+      your WHERE must search for those four strings and nothing else.
+      Do NOT invent 'કાંદા', 'प्याज', or any other equivalent.
+
+   b) NO VARIANTS SECTION → GENERATE GUJARATI YOURSELF:
+      For every keyword in the user query (product, crop, equipment, technical term):
+      • Always include the user's original form (as typed)
+      • Always include the Gujarati script equivalent
+      • If the user typed Gujarati script, also include the Romanized form
+
+      ⚠️ CRITICAL — GUJARATI, NOT HINDI:
+      The database stores GUJARATI words. Hindi words are WRONG even when written
+      in Gujarati script. For traditional crops/vegetables/fruits where the Hindi
+      and Gujarati words differ, follow this table strictly:
+
+        Concept       Gujarati ✓         Hindi ✗ (do NOT use)
+        ───────────────────────────────────────────────────────
+        onion         ડુંગળી              કાંદા / प्याज
+        tomato        ટામેટા              ટમાટર / टमाटर
+        potato        બટાકા               આલુ / आलू
+        garlic        લસણ                 લહસુન / लहसुन
+        rice          ચોખા / ડાંગર         ચાવલ / चावल
+
+      For TECHNICAL / EQUIPMENT terms, use phonetic transliteration to Gujarati script:
+
+        English      Gujarati script
+        ────────────────────────────
+        motor       → મોટર
+        tractor     → ટ્રેક્ટર
+        pump        → પંપ
+        sprayer     → સ્પ્રેયર
+        thresher    → થ્રેસર
+        harvester   → હાર્વેસ્ટર
+        cultivator  → કલ્ટિવેટર
+        rotavator   → રોટાવેટર
+        seeder      → સીડર
+
+      For unknown words, transliterate phonetically into Gujarati script.
+      Example WHERE forms:
+        keyword "motor"     → name LIKE '%motor%' OR name LIKE '%મોટર%'
+        keyword "harvester" → name LIKE '%harvester%' OR name LIKE '%હાર્વેસ્ટર%'
+        keyword "ઘઉં"        → name LIKE '%ઘઉં%' OR name LIKE '%ghau%' OR name LIKE '%wheat%'
+
+   c) Search each keyword INDEPENDENTLY with OR across the full variant list —
+      NEVER use a full-phrase LIKE.
+5. JOINS — MANDATORY: for every primary table that has entries under its JOINS block,
    (a) copy those JOIN clauses verbatim into your FROM clause (JOIN vs LEFT JOIN exactly as shown),
    (b) in the SELECT list, return the joined tables' descriptive columns
        (e.g. yards.name, sub_categories.name, cities.name, kshop_companies.name)
@@ -693,24 +858,97 @@ RULES:
    Never return a *_id column to the user when the referenced table is listed as a JOIN target.
    Short aliases are fine (p, y, sc, c, kp, kco, kc, kw, bp, u, n, vp), but every JOIN from
    the JOINS block MUST appear whenever the referenced table has a name/title/display_name column.
-5. Always add: WHERE <table>.deleted_at IS NULL  (for tables that have deleted_at)
-6. For kshop_products: always add AND status = 1
-7. NEVER generate SELECT * without WHERE clause
-8. NEVER generate a query with no WHERE clause
-9. CITY/LOCATION NAMES — CRITICAL: Never use exact match (=) for city/taluka/state names.
-   Always use LIKE for location names. City names may be stored in Gujarati script.
-   Example: cities.name = 'Mehsana' → WRONG
-   Correct: (cities.name LIKE '%Mehsana%' OR cities.name LIKE '%મહેસાણા%' OR cities.name LIKE '%Mahesana%')
-   Common Gujarati city transliterations to always include:
-   Ahmedabad→અમદાવાદ, Surat→સુરત, Vadodara→વડોદરા, Rajkot→રાજકોટ,
-   Mehsana→મહેસાણા, Gandhinagar→ગાંધીનગર, Anand→આણંદ, Bharuch→ભરૂચ,
-   Junagadh→જૂનાગઢ, Bhavnagar→ભાવનગર, Jamnagar→જામનગર, Amreli→અમરેલી
+6. Always add: WHERE <table>.deleted_at IS NULL  (for tables that have deleted_at)
+7. For kshop_products: always add AND status = 1
+8. NEVER generate SELECT * without WHERE clause
+9. NEVER generate a query with no WHERE clause
+10. LOCATION NAMES — CRITICAL:
+   a) Never use exact match (=) for location names. Always use LIKE with both English and Gujarati script.
+   b) A location name can be a YARD name, a TALUKA name, or a CITY name — you cannot know which in advance.
+      Yard names are typically named after the taluka or city they are in (e.g. yard "ગોંડલ" is in taluka "ગોંડલ").
+   c) When filtering products/prices by location, ALWAYS join yards to BOTH cities AND talukas,
+      then search ALL THREE name columns with OR:
+        LEFT JOIN cities c ON y.city_id = c.id
+        LEFT JOIN talukas t ON y.taluka_id = t.id
+        WHERE (y.name LIKE '%LocationName%' OR c.name LIKE '%LocationName%' OR t.name LIKE '%LocationName%')
+   d) Include both English and Gujarati script variants in each LIKE:
+        (y.name LIKE '%Gondal%' OR y.name LIKE '%ગોંડલ%'
+         OR c.name LIKE '%Gondal%' OR c.name LIKE '%ગોંડલ%'
+         OR t.name LIKE '%Gondal%' OR t.name LIKE '%ગોંડલ%')
+   e) NEVER filter location through only ONE of cities/talukas/yards — always search all three.
 10. STATUS COLUMN — CRITICAL: NEVER add any status condition to WHERE clause for any table
     EXCEPT kshop_products (rule 6 above). Do NOT add AND status = 'active', AND status = 1,
     AND is_sold = 0, or any other status/availability filter on any other table.
     Status filtering is handled automatically after data retrieval — adding it in SQL
     will cause rows with valid non-'active' status values (e.g. sold_out, available)
     to be silently excluded from results.
+11. TRANSITIVE JOINS — when a table references another table that itself has JOINs,
+    chain them. For example, products→yards gives you yard_id. But yards→cities AND
+    yards→talukas give you the location. So for product location queries, your FROM clause
+    must include: products JOIN yards ON ... LEFT JOIN cities ON yards.city_id = cities.id
+    LEFT JOIN talukas ON yards.taluka_id = talukas.id. Apply this chaining for ALL tables
+    — always follow the full FK path shown in the JOINS block of each table.
+
+12. CATEGORY-BASED FILTERING — MANDATORY FOR buy_sell_products AND kshop_products:
+    NEVER filter by buy_sell_products.product_name or kshop_products.name with LIKE.
+    These product name columns are user-entered text and DO NOT reliably contain keywords.
+    Instead, ALWAYS use a category subquery to match the keyword:
+
+    For buy_sell_products:
+      bp.category_id IN (
+        SELECT id FROM buy_sell_categories
+        WHERE (name LIKE '%keyword%' OR name LIKE '%gujarati_variant%')
+        AND deleted_at IS NULL
+      )
+
+    For kshop_products:
+      kp.kshop_category_id IN (
+        SELECT id FROM kshop_categories
+        WHERE (name LIKE '%keyword%' OR name LIKE '%gujarati_variant%')
+        AND deleted_at IS NULL
+      )
+
+    Apply all keyword variants from KEYWORD SEARCH VARIANTS section inside the subquery WHERE.
+    This rule is ABSOLUTE — no exceptions for buy_sell_products and kshop_products.
+    Examples:
+      User: "tractor in buy sell" →
+        WHERE bp.deleted_at IS NULL
+        AND bp.category_id IN (SELECT id FROM buy_sell_categories WHERE (name LIKE '%tractor%' OR name LIKE '%ટ્રેક્ટર%') AND deleted_at IS NULL)
+      User: "weeder in kshop" →
+        WHERE kp.deleted_at IS NULL AND kp.status = 1
+        AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE (name LIKE '%weeder%' OR name LIKE '%વીડર%' OR name LIKE '%power weeder%') AND deleted_at IS NULL)
+
+13. IMAGE COLUMNS — ALWAYS INCLUDE IN SELECT:
+    For every table (primary or JOINed) whose COLUMNS list includes a column named
+    exactly `img`, `image`, or `images`, you MUST include that column in the SELECT.
+    Use the table alias if one is used in the query.
+    Rules:
+      a) Primary table has `img`/`image`/`images` → include as `alias.img` or `alias.image` or `alias.images`
+      b) JOINed table has `img`/`image` → include as `joined_alias.img AS <joined_table>_img`
+         Example: sub_categories aliased as `sc` has `img` → SELECT sc.img AS crop_img
+         Example: kshop_categories aliased as `kc` has `img` → SELECT kc.img AS category_img
+         Example: buy_sell_categories aliased as `bc` has `image` → SELECT bc.image AS category_image
+      c) buy_sell_products has `images` (JSON array of product photos) → always include as `bp.images`
+    This rule is MANDATORY — never omit img/image/images columns when they exist in the COLUMNS block.
+    Do NOT rename these columns arbitrarily — use the aliases shown above.
+
+13. IMAGE COLUMNS — MANDATORY INCLUSION:
+    The JOINS block above annotates lines with "-- img cols: X" wherever the
+    referenced table has an img/image/images column.  For EVERY such annotation,
+    you MUST include that column in the SELECT list using the table alias.
+    Naming convention:
+      alias.img       AS  <joined_table_short>_img      (e.g. sc.img  AS crop_img)
+      alias.image     AS  <joined_table_short>_image    (e.g. bc.image AS category_image)
+      alias.images    → include as-is (e.g. bp.images)
+    Also include img/image/images from the PRIMARY table itself when present.
+    Examples:
+      products JOIN sub_categories (-- img cols: img)  →  SELECT sc.img AS crop_img
+      buy_sell_products LEFT JOIN buy_sell_categories (-- img cols: image)  →  SELECT bc.image AS category_image
+      buy_sell_products has images column  →  SELECT bp.images
+      kshop_products LEFT JOIN kshop_categories (-- img cols: img)  →  SELECT kc.img AS category_img
+      kshop_products JOIN kshop_companies (-- img cols: img)  →  SELECT kco.img AS company_img
+    This rule is MANDATORY — never omit an img/image/images column when the JOIN
+    annotation signals it exists.  The frontend requires these columns to display images.
 
 OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
 [{{"table_name": "primary_table", "sql": "SELECT ... FROM ... WHERE ..."}}]"""
@@ -737,9 +975,9 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
         return self._parse_sql_response(response.content)
 
     def _parse_sql_response(self, content: str) -> List[Dict]:
-        """Parse LLM SQL response. Validates: must have WHERE, not bare SELECT *."""
+        """Parse LLM SQL response. Sanitizes, validates: must have WHERE, not bare SELECT *."""
         import re as _re
-        from app.utils.json_parser import json_parser
+        from app.utils.json_parser import json_parser, sql_sanitizer
         try:
             queries = json_parser.extract_queries_from_text(content)
             if not queries:
@@ -748,7 +986,12 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
             for q in (queries or []):
                 if not isinstance(q, dict) or "sql" not in q:
                     continue
-                sql = q["sql"].strip()
+                
+                # ── SANITIZE: Remove LLM-generated noise (backslashes, missing prefixes) ─
+                sql = sql_sanitizer.sanitize_sql(q["sql"].strip())
+                q["sql"] = sql
+                
+                # Validation checks
                 if "WHERE" not in sql.upper():
                     logger.warning(f"Rejecting query with no WHERE: {sql[:100]}")
                     continue
@@ -759,7 +1002,7 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
                     m = _re.search(r"FROM\s+([a-zA-Z0-9_]+)", sql, _re.IGNORECASE)
                     q["table_name"] = m.group(1) if m else "unknown"
                 valid.append(q)
-                logger.debug(f"Valid SQL: {sql[:120]}")
+                logger.debug(f"Valid SQL (sanitized): {sql[:120]}")
             return valid
         except Exception as e:
             logger.error_with_context(e, {"action": "_parse_sql_response", "content": content[:200]})
@@ -792,25 +1035,88 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
             return [x for x in parsed if x in available]
         return []
 
+    # ── Keyword auto-detection (for SQL-generation prompt) ────────────────────
+
+    @staticmethod
+    def _detect_keywords_in_query(query: str) -> List[tuple]:
+        """
+        Scan the user's query for any token matching the curated KEYWORD_VARIANTS
+        map and return [(matched_form, variants), ...] — deduped by variant set.
+
+        Why this exists:
+          When F1 does NOT provide a keyword_hint, the SQL-generation prompt has
+          no authoritative cross-language mapping to anchor the LLM.  The LLM
+          then invents Gujarati/Hindi equivalents from its own training, and
+          frequently picks the wrong language (e.g. Hindi 'કાંદા' for onion
+          instead of Gujarati 'ડુંગળી' which is what the DB stores).
+
+          This function pulls the real variants from the same KEYWORD_VARIANTS
+          map that the F1 path uses, so both paths share one source of truth.
+
+        Matching:
+          - Single tokens: 'onion', 'ડુંગળી', 'kanda', 'dungli'
+          - Bigrams:       'motor pump', 'power weeder'
+          - Case-insensitive for English/romanized; exact-script for Gujarati
+            (KEYWORD_VARIANTS is already indexed under all three forms).
+
+        Deduplication:
+          If the query says 'onion ડુંગળી', both tokens map to the same variant
+          list — we return only one entry to keep the prompt compact.
+        """
+        if not query:
+            return []
+        # Tokenize — keep English/Gujarati/Devanagari ranges
+        tokens = re.findall(
+            r"[\w઀-૿ऀ-ॿ]+",
+            query.lower(),
+        )
+        # Build candidate list: unigrams + bigrams
+        candidates: List[str] = list(tokens)
+        for i in range(len(tokens) - 1):
+            candidates.append(f"{tokens[i]} {tokens[i+1]}")
+
+        matched: List[tuple] = []
+        seen: set = set()
+        for cand in candidates:
+            variants = KEYWORD_VARIANTS.get(cand)
+            if variants is None:
+                continue
+            key = tuple(variants)
+            if key in seen:
+                continue
+            seen.add(key)
+            matched.append((cand, list(variants)))
+        return matched
+
     # ── Exploratory query helpers ──────────────────────────────────────────────
 
     @staticmethod
     def _is_exploratory_query(query: str, selected_tools: list) -> bool:
-        # Return True when the query has no specific item/product keyword to
-        # search for — i.e. the user is asking "what is X?" rather than
-        # "find product Y in X".
-        #
-        # Algorithm:
-        #   1. Lowercase + strip punctuation
-        #   2. Build domain_words from selected_tools table name components
-        #      e.g. query_buy_sell_products -> {buy, sell, products}
-        #   3. Combine STRIP_WORDS + domain_words into one exclusion set
-        #   4. If no word survives exclusion (length > 1) -> exploratory
-        import re as _re
-        q_clean = _re.sub(r"[^\w\s]", " ", query.lower())
-        words   = q_clean.split()
+        """
+        True when the query has no specific search keyword — user is asking
+        "what is X?" / "how do I do Y?" rather than naming a real item.
 
-        # Extract component words from every selected table name
+        Delegates filler detection to `strip_fillers` (regex + fuzzy pipeline),
+        then additionally strips domain words derived from the selected table
+        names (which are context-specific and not global fillers).
+
+        Examples (expected outcomes):
+          "how i sell any product"   → []                   → exploratory
+          "what is kshop"            → []                   → exploratory
+          "list all yards"           → []                   → exploratory (CATEGORY root)
+          "show me prodct"           → []                   → exploratory (typo handled)
+          "kapas bhav"               → ["kapas"]            → specific search
+          "balwan weeder price"      → ["balwan", "weeder"] → specific search
+        """
+        survivors = strip_fillers(query)
+        if not survivors:
+            return True
+
+        # Strip domain words derived from the selected table names — these
+        # are context-specific ("buy_sell_products" → "buy", "sell", "products")
+        # and shouldn't be promoted to search targets.  Each component runs
+        # through is_filler_token so inflections and typos are handled the
+        # same way as global fillers.
         domain_words: set = set()
         for tool in (selected_tools or []):
             table = tool.replace("query_", "").replace("_", " ")
@@ -818,25 +1124,158 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
                 if len(w) > 1:
                     domain_words.add(w)
 
-        exclusion = STRIP_WORDS | domain_words
-        meaningful = [w for w in words if w not in exclusion and len(w) > 1]
+        meaningful = [
+            w for w in survivors
+            if w not in domain_words and not is_filler_token(w)
+        ]
         return len(meaningful) == 0
 
     @staticmethod
     def _build_exploratory_sql(primary_table: str, compiled_schema: str) -> dict:
-        # Build a simple recent-records fallback SQL for exploratory queries.
-        # Fetches the 10 most recently created rows with no keyword filter.
-        # Respects soft-delete and kshop_products status rule.
+        """
+        Build a recent-records fallback SQL for exploratory queries.
+        Fetches 10 most recent rows with NO keyword filter.
+
+        Parses the pre-compiled schema to:
+          1. Include JOIN clauses so FK columns resolve to human-readable names
+          2. Replace raw _id columns with joined_table.name in SELECT
+          3. Project img/image/images columns from BOTH the primary table and
+             every JOINed table (annotated as "-- img cols: X" by
+             _build_compiled_schemas) so the frontend always receives image
+             data — same coverage as the LLM-generated SQL path (Rule 13).
+          4. Skip metadata columns (id, updated_at, deleted_at, status) for
+             cleaner output
+
+        SELECT projection uses priority-based bucketing — image columns are
+        always included regardless of column count. Capping the SELECT list
+        was previously dropping img cols silently when wide tables (e.g.
+        buy_sell_products) had more non-skip cols than the cap.
+        """
+        schema = compiled_schema or ""
+
+        # ── WHERE clauses ──
         clauses = []
-        if "deleted_at" in (compiled_schema or ""):
+        if "deleted_at" in schema:
             clauses.append(f"{primary_table}.deleted_at IS NULL")
         if primary_table == "kshop_products":
             clauses.append(f"{primary_table}.status = 1")
 
+        # ── Parse JOINS block → map FK column to ref_table; also capture
+        # the "-- img cols: X" annotation per ref_table so we can project
+        # joined-table image columns alongside the joined-table name.
+        # Compiled schema format:
+        #   JOINS:
+        #     JOIN sub_categories ON products.subcategory_id = sub_categories.id  -- img cols: img
+        #     LEFT JOIN yards ON products.yard_id = yards.id
+        fk_map: Dict[str, str] = {}                  # FK col → ref_table
+        img_cols_by_ref: Dict[str, List[str]] = {}   # ref_table → ["img"] / ["image"] / ...
+        join_clauses: List[str] = []
+        joins_match = re.search(r"JOINS:\n(.*?)(?:\n  [A-Z]|\Z)", schema, re.DOTALL)
+        if joins_match:
+            for line in joins_match.group(1).strip().splitlines():
+                line = line.strip()
+                if not line or line.startswith("(no"):
+                    continue
+                # Capture img-cols annotation BEFORE stripping the comment.
+                # _build_compiled_schemas appends "  -- img cols: X" to JOIN
+                # lines so the LLM can see which joined tables have image
+                # columns. We use the same annotation here to project those
+                # columns — closing the gap between the LLM and exploratory
+                # SQL paths.
+                img_match = re.search(r"--\s*img cols:\s*(.+?)\s*$", line)
+                line_img_cols = (
+                    [c.strip() for c in img_match.group(1).split(",") if c.strip()]
+                    if img_match else []
+                )
+                # Strip any inline SQL comment before using the line in actual SQL.
+                # The annotations are LLM-context-only — they must never reach the
+                # SQL executor because MySQL treats "-- " as a line comment, which
+                # would comment out everything after it (including WHERE and ORDER BY).
+                clean_line = re.sub(r'\s*--.*$', '', line).strip()
+                # Extract: "LEFT JOIN yards ON products.yard_id = yards.id"
+                m = re.match(
+                    r"((?:LEFT\s+)?JOIN)\s+(\w+)\s+ON\s+\w+\.(\w+)\s*=\s*\w+\.\w+",
+                    clean_line, re.IGNORECASE,
+                )
+                if m:
+                    ref_table = m.group(2)
+                    fk_col = m.group(3)       # e.g. "yard_id"
+                    fk_map[fk_col] = ref_table
+                    if line_img_cols:
+                        img_cols_by_ref[ref_table] = line_img_cols
+                    join_clauses.append(clean_line)  # always use comment-stripped line
+
+        # ── Parse COLUMNS → bucket-based SELECT list ──
+        # Three buckets — priority and image are MANDATORY (never trimmed),
+        # other fills remaining slots up to MAX_COLUMNS:
+        #   priority — display, price, time, quantity, joined-table names
+        #   image    — img/image/images on primary OR joined tables
+        #   other    — everything else not in skip_cols
+        skip_cols = {"id", "updated_at", "deleted_at", "status"}
+        img_col_names = {"img", "image", "images"}
+        priority_col_names = {
+            # Display / identifier
+            "name", "product_name", "title", "description",
+            # Price / numeric
+            "price", "min_price", "max_price", "discount_price", "price_date",
+            # Quantity / metric
+            "quantity_available", "weight_value", "views_count",
+            # Time
+            "created_at",
+        }
+        MAX_COLUMNS = 12
+
+        priority_parts: List[str] = []
+        image_parts:    List[str] = []
+        other_parts:    List[str] = []
+        seen_refs: set = set()
+
+        col_match = re.search(r"COLUMNS:\s*(.*)", schema)
+        if col_match:
+            for part in col_match.group(1).split("|"):
+                col = part.strip().split(":", 1)[0].strip()
+                if not col or col in skip_cols:
+                    continue
+                if col in fk_map:
+                    ref_table = fk_map[col]
+                    if ref_table not in seen_refs:
+                        # Joined-table descriptive name → priority bucket
+                        priority_parts.append(
+                            f"{ref_table}.name AS {ref_table}_name"
+                        )
+                        # Joined-table image columns → image bucket (mandatory)
+                        # Deterministic alias: <ref_table>_<col> (e.g. sub_categories_img,
+                        # buy_sell_categories_image). Frontend scans for any column
+                        # ending in img/image/images regardless of alias prefix.
+                        for img_col in img_cols_by_ref.get(ref_table, []):
+                            image_parts.append(
+                                f"{ref_table}.{img_col} AS {ref_table}_{img_col}"
+                            )
+                        seen_refs.add(ref_table)
+                    # Don't also select the raw _id
+                elif col in img_col_names:
+                    # Primary-table image column → image bucket (mandatory)
+                    image_parts.append(f"{primary_table}.{col}")
+                elif col in priority_col_names:
+                    priority_parts.append(f"{primary_table}.{col}")
+                else:
+                    other_parts.append(f"{primary_table}.{col}")
+
+        # Priority + image always included. Other fills remaining slots.
+        select_parts: List[str] = priority_parts + image_parts
+        remaining = MAX_COLUMNS - len(select_parts)
+        if remaining > 0:
+            select_parts.extend(other_parts[:remaining])
+
+        select_cols = ", ".join(select_parts) if select_parts else f"{primary_table}.*"
+        joins_sql = " ".join(join_clauses)
         where = " AND ".join(clauses) if clauses else "1=1"
-        sql   = (
-            f"SELECT * FROM {primary_table} "
-            f"WHERE {where} "
+
+        sql = (
+            f"SELECT {select_cols} "
+            f"FROM {primary_table} "
+            + (f"{joins_sql} " if joins_sql else "")
+            + f"WHERE {where} "
             f"ORDER BY {primary_table}.created_at DESC LIMIT 10"
         )
         return {"table_name": primary_table, "sql": sql}

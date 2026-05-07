@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     # ================================
     SCHEMA_DIR: str = Field(default="app/schemas", description="Schema directory path")
     TOOLS_DIR: str = Field(default="app/schemas/tools", description="Tools directory path")
+    SCHEMA_PRIVACY_POLICY_PATH: str = Field(
+        default="app/schemas/privacy_policy.json",
+        description="Privacy policy used to sanitize schema tools and SQL access",
+    )
     
     @validator("LOG_LEVEL")
     def validate_log_level(cls, v):
