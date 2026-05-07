@@ -56,6 +56,7 @@ class QueryExecutor:
             
             # Sanitize query
             clean_sql = query_validator.sanitize_query(sql)
+            clean_sql = clean_sql.replace('%', '%%')
             
             # Add LIMIT if not present (safety measure)
             if 'LIMIT' not in clean_sql.upper():
@@ -69,7 +70,7 @@ class QueryExecutor:
             # Execute query
             results = await db_manager.execute_query(
                 query=clean_sql,
-                params=params,
+                params=params if params is not None else (),
                 fetch_one=False
             )
             

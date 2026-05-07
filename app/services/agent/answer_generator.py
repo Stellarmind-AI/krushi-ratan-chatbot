@@ -172,6 +172,22 @@ RULE 6 — NO UNREQUESTED EXTRAS:
 - Do NOT mention "in our database"
 
 Keep the answer short, natural, and directly responsive to what was asked.
+
+RULE 7 — DATABASE VALUES IN NON-ENGLISH SCRIPTS (CRITICAL):
+Database rows may contain Gujarati, Hindi, or other Indian-script text
+(news titles, product names, descriptions, category names, etc.).
+You MUST translate ALL such non-English text into English in your answer.
+NEVER copy Gujarati or Hindi script characters into your response.
+Write the English meaning/translation of every title, name, and description.
+
+Example:
+  DB value: "શું તમને આ ખબર છે? ખેડૂતો ટ્રેક્ટરના ટાયરમાં પાણી કેમ ભરે છે"
+  Write:    "Did You Know? Why Farmers Fill Water in Tractor Tyres"
+
+  DB value: "નેપાળથી ખાદ્ય તેલની આયાત ખેડૂતો અને સરકાર માટે સમસ્યા બની"
+  Write:    "Edible Oil Imports from Nepal Become a Problem for Farmers and Government"
+
+If you cannot translate a term, transliterate it (write it in English letters).
 """
 
     

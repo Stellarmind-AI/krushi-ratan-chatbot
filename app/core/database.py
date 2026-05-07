@@ -168,7 +168,7 @@ class DatabaseManager:
         for attempt in range(1, _RECONNECT_RETRIES + 1):
             try:
                 async with self.get_cursor() as cursor:
-                    await cursor.execute(query, params)
+                    await cursor.execute(query, params if params else ())
                     if fetch_one:
                         return await cursor.fetchone()
                     return await cursor.fetchall()

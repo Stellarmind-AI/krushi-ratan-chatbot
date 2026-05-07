@@ -145,6 +145,33 @@ class ChatHandler:
 
         keyword_hint = pending.get("keyword_hint", "")
 
+        # ── Navigation intent handling ────────────────────────────────────
+        # When the user picks a nav_ option (e.g. "Steps to buy crops"),
+        # route to NAVIGATION flow with a clear query.
+        _NAV_INTENT_QUERIES = {
+            "nav_buy_crop":  "How to buy crops from farmers in Krushi Ratn app?",
+            "nav_buy_kshop": "How to buy products from K-Shop and Buy/Sell marketplace in Krushi Ratn app?",
+        }
+
+        if intent_key.startswith("nav_"):
+            nav_query = _NAV_INTENT_QUERIES.get(intent_key, original_query)
+            logger.info(
+                "F1 NAV INTENT → NAVIGATION FLOW",
+                intent_key=intent_key,
+                nav_query=nav_query[:80],
+            )
+            await self._run_pipeline(
+                ws,
+                nav_query,
+                session_id,
+                client_id,
+                confirmed_intent=None,
+                lang_type_override=lang_type,
+                keyword_hint=keyword_hint,
+                force_navigation_override=True,
+            )
+            return
+
         # Resume the pipeline — pass confirmed_intent and keyword_hint so
         # orchestrator skips tool-selection and SQL is targeted to the keyword.
         await self._run_pipeline(
@@ -176,6 +203,7 @@ class ChatHandler:
         confirmed_intent: Optional[str] = None,   # F1: set after user picks clarification option
         lang_type_override: Optional[str] = None, # F1: reuse detected lang from paused query
         keyword_hint: str = "",                   # F1: the matched keyword (e.g. "kapas") for SQL accuracy
+        force_navigation_override: bool = False,  # F1: when user picks a nav_ intent from clarification
     ):
         """
         Full pipeline:
@@ -215,14 +243,37 @@ class ChatHandler:
             f1_result = self.confirmation_layer.check(processed_text)
 
             if isinstance(f1_result, ConfirmedIntent):
-                # High-confidence intent — skip F1 UI, inject directly into pipeline
-                logger.info(
-                    "F1 HIGH CONFIDENCE",
-                    intent=f1_result.intent_key,
-                    confidence=f"{f1_result.confidence:.0%}",
-                    session_id=session_id,
-                )
-                confirmed_intent = f1_result.intent_key
+                # ── NAV INTENT: F1 auto-confirmed a navigation intent ────
+                # crop + buy → nav_buy_crop. Don't pass to orchestrator as
+                # confirmed_intent (that would force SQL). Instead, rewrite
+                # the query and force NAVIGATION flow.
+                _NAV_INTENT_QUERIES = {
+                    "nav_buy_crop":  "How to buy crops from farmers in Krushi Ratn app?",
+                    "nav_buy_kshop": "How to buy products from K-Shop and Buy/Sell marketplace in Krushi Ratn app?",
+                }
+                if f1_result.intent_key in _NAV_INTENT_QUERIES:
+                    # Build crop-specific query if keyword is available
+                    if f1_result.intent_key == "nav_buy_crop" and f1_result.keyword:
+                        crop_name = f1_result.keyword.capitalize()
+                        processed_text = f"How to buy {crop_name} from farmers in Krushi Ratn app?"
+                    else:
+                        processed_text = _NAV_INTENT_QUERIES[f1_result.intent_key]
+                    force_navigation_override = True
+                    logger.info(
+                        "F1 NAV AUTO-ROUTE",
+                        intent=f1_result.intent_key,
+                        nav_query=processed_text[:80],
+                    )
+                    # confirmed_intent stays None → orchestrator won't force SQL
+                else:
+                    # Normal SQL intent — inject directly
+                    logger.info(
+                        "F1 HIGH CONFIDENCE",
+                        intent=f1_result.intent_key,
+                        confidence=f"{f1_result.confidence:.0%}",
+                        session_id=session_id,
+                    )
+                    confirmed_intent = f1_result.intent_key
 
             elif f1_result is not None:
                 # Low-confidence — pipeline paused, ask user
@@ -259,7 +310,10 @@ class ChatHandler:
         # as SQL (e.g. "મારા ઓર્ડર ક્યાં છે?" sounds like order data lookup).
         # Fix: when F1 detects nav signals, force NAVIGATION flow in orchestrator.
         force_navigation = False
-        if not confirmed_intent:
+        if force_navigation_override:
+            force_navigation = True
+            print(f"  🧭 NAV OVERRIDE FROM F1 — will force NAVIGATION flow", flush=True)
+        elif not confirmed_intent:
             q_check = processed_text.lower() + " " + processed_text
             if _is_navigation_query(q_check):
                 force_navigation = True

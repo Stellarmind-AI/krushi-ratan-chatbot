@@ -754,6 +754,15 @@ RULES:
 2. Search each keyword INDEPENDENTLY with OR — never use full phrase LIKE
 3. For product names: search both English and Gujarati script
    Examples: balwan+બલવાન, weeder+વીડર, kapas+કપાસ, pump+પંપ
+3b. PARENTHESES — CRITICAL: when using OR to search multiple variants of the same
+   keyword (English + Gujarati), ALWAYS wrap them in parentheses to prevent operator
+   precedence bugs. WITHOUT parentheses, AND binds tighter than OR and the WHERE
+   clause silently breaks:
+   ❌ WRONG: WHERE deleted_at IS NULL AND name LIKE '%peanuts%' OR name LIKE '%મગફળી%'
+     (this means: (deleted_at IS NULL AND name LIKE '%peanuts%') OR (name LIKE '%મગફળી%')
+      — the second branch ignores deleted_at entirely!)
+   ✅ RIGHT: WHERE deleted_at IS NULL AND (name LIKE '%peanuts%' OR name LIKE '%મગફળી%')
+   Apply this to EVERY multi-variant OR group in the WHERE clause.
 4. JOINS — MANDATORY: for every primary table that has entries under its JOINS block,
    (a) copy those JOIN clauses verbatim into your FROM clause (JOIN vs LEFT JOIN exactly as shown),
    (b) in the SELECT list, return the joined tables' descriptive columns
@@ -764,7 +773,10 @@ RULES:
    the JOINS block MUST appear whenever the referenced table has a name/title/display_name column.
 5. Always add: WHERE <table>.deleted_at IS NULL  (for tables that have deleted_at)
 6. For kshop_products: always add AND status = 1
-7. NEVER generate SELECT * without WHERE clause
+7. NEVER use SELECT * or SELECT <alias>.* in any form. Always list explicit columns.
+   BAD:  SELECT * FROM buy_sell_products ...
+   BAD:  SELECT bp.* FROM buy_sell_products bp ...
+   GOOD: SELECT bp.title, bp.price, bp.created_at FROM buy_sell_products bp ...
 8. NEVER generate a query with no WHERE clause
 9. LOCATION NAMES — CRITICAL:
    a) Never use exact match (=) for location names. Always use LIKE with both English and Gujarati script.
@@ -793,7 +805,8 @@ RULES:
     LEFT JOIN talukas ON yards.taluka_id = talukas.id. Apply this chaining for ALL tables
     — always follow the full FK path shown in the JOINS block of each table.
 
-OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
+OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation.
+SQL must be on a SINGLE LINE — do NOT use backslash (\\) line continuations.
 [{{"table_name": "primary_table", "sql": "SELECT ... FROM ... WHERE ..."}}]"""
 
         messages = [
@@ -833,8 +846,9 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
                 if "WHERE" not in sql.upper():
                     logger.warning(f"Rejecting query with no WHERE: {sql[:100]}")
                     continue
-                if _re.match(r"SELECT\s+\*\s+FROM\s+\w+\s*(?:LIMIT|$)", sql, _re.IGNORECASE):
-                    logger.warning(f"Rejecting bare SELECT *: {sql[:80]}")
+                if _re.search(r"SELECT\s+(?:\w+\.)?\*", sql, _re.IGNORECASE):
+                    logger.warning(f"Rejecting SELECT * / table.*: {sql[:80]}")
+                    # Attempt to fix by asking validator what columns are available, or just skip
                     continue
                 if "table_name" not in q:
                     m = _re.search(r"FROM\s+([a-zA-Z0-9_]+)", sql, _re.IGNORECASE)
@@ -979,7 +993,11 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
                 else:
                     select_parts.append(f"{primary_table}.{col}")
 
-        select_cols = ", ".join(select_parts[:10]) if select_parts else f"{primary_table}.*"
+        if not select_parts:
+            logger.warning(f"_build_exploratory_sql: no columns parsed for {primary_table}, using created_at fallback")
+            select_cols = f"{primary_table}.created_at"
+        else:
+            select_cols = ", ".join(select_parts[:10])
         joins_sql = " ".join(join_clauses)
         where = " AND ".join(clauses) if clauses else "1=1"
 

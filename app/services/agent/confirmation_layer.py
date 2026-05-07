@@ -43,6 +43,8 @@ _NAV_SIGNALS: List[str] = [
     "what are the steps", "steps for", "process for", "process to",
     "instructions for", "instructions to", "procedure for",
     "what steps", "steps to follow", "what to do to",
+    "what can i do to", "what should i do to", "what do i do to",
+    "what can i do", "what should i do", "what do i need to do",
     # English — switch role (nav_switch_role)
     "switch account", "switch role", "role change", "farmer company switch",
     "change role", "account switch",
@@ -168,6 +170,7 @@ class ConfirmedIntent:
     intent_key: str
     confidence: float
     domain:     str
+    keyword:    str = ""   # matched crop/product name (e.g. "rice") — used by nav intents
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -183,6 +186,9 @@ INTENT_TO_TABLES: Dict[str, List[str]] = {
     "video_search":     ["query_video_posts", "query_users", "query_video_categories"],
     "equipment_kshop":  ["query_kshop_products", "query_kshop_companies", "query_kshop_categories", "query_kshop_weights"],
     "equipment_used":   ["query_buy_sell_products", "query_buy_sell_categories", "query_users"],
+    # Navigation intents — no SQL tables, handled by NAVIGATION flow
+    "nav_buy_crop":     [],
+    "nav_buy_kshop":    [],
 }
 
 INTENT_TO_PROMPT_NOTE: Dict[str, str] = {
@@ -194,6 +200,8 @@ INTENT_TO_PROMPT_NOTE: Dict[str, str] = {
     "video_search":     "User confirmed: FARMING VIDEOS. Use only video_posts table.",
     "equipment_kshop":  "User confirmed: NEW EQUIPMENT from K-Shop. Use only kshop tables.",
     "equipment_used":   "User confirmed: USED/SECOND-HAND EQUIPMENT from Buy/Sell. Use only buy_sell tables.",
+    "nav_buy_crop":     "User wants: STEPS TO BUY CROPS from farmers/mandi.",
+    "nav_buy_kshop":    "User wants: STEPS TO BUY PRODUCTS (new from K-Shop or used from Buy/Sell).",
 }
 
 
@@ -333,13 +341,32 @@ _CROP_KEYWORDS: List[str] = [
     "mung", "moong",
     "chana", "ghana", "channa",
     "tal", "sesame",
-    "rice crop", "chaval",
+    "rice crop", "rice", "chaval",
     "soybean", "soya",
     "onion", "dungli", "kanda",
     "garlic", "lasan",
     "tomato", "tameta",
     "potato", "bataka",
     "sugarcane", "sherdio",
+    # ── ADDED: crops that were missing ──
+    "castor", "erandi", "arandi", "divel",
+    "mango", "mangoes", "keri", "aam",
+    "cumin", "jeeru", "jiru",
+    "fennel", "variali", "sauf",
+    "coriander", "dhana", "dhaniya",
+    "turmeric", "haldi", "halder",
+    "mustard", "rai", "sarso",
+    "moth", "math", "matki",
+    "pigeon pea", "tuver", "tuveral", "arhar",
+    "black gram", "adad", "adadal", "urad",
+    "isabgol", "psyllium",
+    "guar", "guvar",
+    "banana", "kela",
+    "chilli", "mirchi", "marcha",
+    "lemon", "limbu", "nimbu",
+    "papaya", "papai",
+    "pomegranate", "dadam", "anar",
+    "coconut", "nariyal", "nadiyer",
     # Gujarati script
     "ઘઉં", "ઘઉ",
     "કપાસ",
@@ -357,7 +384,23 @@ _CROP_KEYWORDS: List[str] = [
     "ટામેટા", "ટામેટું",
     "બટાકા", "બટેટા",
     "શેરડી",
-    "તુવર", "અડદ", "મઠ",
+    "તુવેર", "અડદ", "મઠ",
+    # ── ADDED: Gujarati script for new crops ──
+    "એરંડા", "એરંડી", "દિવેલ",
+    "કેરી", "આંબા",
+    "જીરું", "જીરુ",
+    "વરિયાળી",
+    "ધાણા", "ધાણી",
+    "હળદર",
+    "રાઈ", "સરસો",
+    "ગુવાર",
+    "કેળા", "કેળું",
+    "મરચા", "મરચું",
+    "લીંબુ",
+    "પપૈયા", "પપૈયું",
+    "દાડમ",
+    "નારિયેળ",
+    "ઈસબગુલ",
 ]
 
 # Scenario 2: Generic product
@@ -438,7 +481,7 @@ _LOCATION_KEYWORDS: List[str] = [
 # (conservative whitelist — only add if you know data exists)
 _CROPS_WITH_SEED_DATA: set = {
     "wheat", "ghau", "gahu", "ઘઉં", "ઘઉ",
-    "kapas", "cotton", "કપાસ",           # cotton seeds are stocked
+    "kapas", "cotton", "કપાસ",
     "bajra", "bajri", "bajro", "બાજરો", "બાજરી",
     "jowar", "jwari", "jwar", "જુવાર",
     "corn", "maize", "makai", "મકાઈ",
@@ -446,12 +489,19 @@ _CROPS_WITH_SEED_DATA: set = {
     "chana", "ghana", "channa", "ચણા",
     "tal", "sesame", "તલ",
     "soybean", "soya", "સોયાબીન",
-    "rice crop", "chaval", "ચોખા", "ડાંગર",
+    "rice crop", "rice", "chaval", "ચોખા", "ડાંગર",
     "magfali", "groundnut", "moongfali", "મગફળી",
+    # New crops with seed data
+    "castor", "erandi", "arandi", "એરંડા", "એરંડી",
+    "cumin", "jeeru", "jiru", "જીરું", "જીરુ",
+    "fennel", "variali", "sauf", "વરિયાળી",
+    "coriander", "dhana", "dhaniya", "ધાણા",
+    "mustard", "rai", "sarso", "રાઈ",
+    "isabgol", "psyllium", "ઈસબગુલ",
+    "guar", "guvar", "ગુવાર",
 }
 
 # Crops that are ONLY tradeable (no seeds data, no processing equipment)
-# These get only price + buy_sell options
 _CROPS_PRICE_ONLY: set = {
     "onion", "dungli", "kanda", "ડુંગળી",
     "tomato", "tameta", "ટામેટા", "ટામેટું",
@@ -460,6 +510,18 @@ _CROPS_PRICE_ONLY: set = {
     "sugarcane", "sherdio", "શેરડી",
     "tuveral", "tuver", "તુવેર",
     "adadal", "adad", "અડદ",
+    # New price-only crops (fruits/veggies — no seed packets in DB)
+    "mango", "mangoes", "keri", "aam", "કેરી", "આંબા",
+    "banana", "kela", "કેળા", "કેળું",
+    "chilli", "mirchi", "marcha", "મરચા", "મરચું",
+    "lemon", "limbu", "nimbu", "લીંબુ",
+    "papaya", "papai", "પપૈયા", "પપૈયું",
+    "pomegranate", "dadam", "anar", "દાડમ",
+    "coconut", "nariyal", "nadiyer", "નારિયેળ",
+    "turmeric", "haldi", "halder", "હળદર",
+    "moth", "math", "matki", "મઠ",
+    "pigeon pea", "arhar",
+    "black gram", "urad",
 }
 
 
@@ -475,6 +537,23 @@ _GU_TO_EN_CROPS: Dict[str, str] = {
     "ડુંગળી": "onion", "ટામેટા": "tomato", "ટામેટું": "tomato",
     "બટાકા": "potato", "બટેટા": "potato", "લસણ": "lasan",
     "શેરડી": "sugarcane",
+    # New crops
+    "એરંડા": "castor", "એરંડી": "castor", "દિવેલ": "castor",
+    "કેરી": "mango", "આંબા": "mango",
+    "જીરું": "cumin", "જીરુ": "cumin",
+    "વરિયાળી": "fennel",
+    "ધાણા": "coriander", "ધાણી": "coriander",
+    "હળદર": "turmeric",
+    "રાઈ": "mustard", "સરસો": "mustard",
+    "ગુવાર": "guar",
+    "કેળા": "banana", "કેળું": "banana",
+    "મરચા": "chilli", "મરચું": "chilli",
+    "લીંબુ": "lemon",
+    "પપૈયા": "papaya", "પપૈયું": "papaya",
+    "દાડમ": "pomegranate",
+    "નારિયેળ": "coconut",
+    "ઈસબગુલ": "isabgol",
+    "તુવેર": "tuver", "અડદ": "adad", "મઠ": "moth",
 }
 
 
@@ -588,31 +667,9 @@ class ConfirmationLayer:
         # Combined string for matching — catches both scripts
         q = q_lower + " " + q_orig
 
-        # ── Step 0: Navigation bypass ─────────────────────────────────────
-        # If the query is a HOW-TO / navigation question, F1 must NOT trigger.
-        # The route_agent handles these as NAVIGATION flow correctly.
-        # Examples: "kevi rite set karvanu", "કેવી રીતે સેટ કરવું", "how to enable"
-        if _is_navigation_query(q):
-            logger.info(f"✅ F1 NAV BYPASS — navigation question detected: {user_query[:60]!r}")
-            return None
-
-        # ── Step 1: Crop short-circuit (runs FIRST for crop queries) ──────
-        # PER PRODUCT RULE: crops only exist in ONE place — mandi/yard prices.
-        # So ANY crop-related query (generic "crops" OR specific crop name)
-        # bypasses F1 and goes straight to crop_price.
-        #
-        # EXCEPTION: if the user mentions "seed" AND the specific crop is in
-        # the _CROPS_WITH_SEED_DATA whitelist, route to seed_info instead.
-        # If seed data is NOT present for that crop (e.g. onion in _CROPS_PRICE_ONLY),
-        # still route to crop_price — do NOT fall into F1 clarification.
-        #
-        # This runs BEFORE confidence scoring so "onion seed" doesn't get
-        # mis-scored as seed_info from the word "seed" alone.
         import re as _re
 
         def _word_match(kw: str, text: str) -> bool:
-            # Multi-word phrases: simple substring match.
-            # Single word: Unicode-aware word boundary (handles Gujarati script).
             if " " in kw:
                 return kw in text
             return bool(_re.search(
@@ -620,15 +677,66 @@ class ConfirmationLayer:
                 text,
             ))
 
+        has_buy_word  = any(h in q for h in _BUY_HINTS)
         has_seed_word = any(h in q for h in _SEED_HINTS)
 
-        # 1a. Specific crop name (check first — more precise than generic "crops")
-        # Sort longest-first so "rice crop" matches before "rice".
+        # ══════════════════════════════════════════════════════════════════
+        # Step 0: BUY-INTENT CHECK — runs BEFORE nav bypass
+        # ══════════════════════════════════════════════════════════════════
+        # CROP + BUY → always navigation (Company role flow). No options needed.
+        # EQUIPMENT + BUY → show options (new vs used vs steps) since there
+        #   ARE multiple valid paths for equipment.
+        if has_buy_word:
+            # 0a. Specific crop + buy → straight to navigation (no clarification)
+            for kw in sorted(_CROP_KEYWORDS, key=len, reverse=True):
+                if not _word_match(kw, q):
+                    continue
+                logger.info(f"✅ F1 CROP+BUY → NAV | keyword='{kw}' → nav_buy_crop (no UI)")
+                return ConfirmedIntent(intent_key="nav_buy_crop", confidence=1.0, domain="navigation", keyword=kw)
+
+            # 0b. Generic "crops" + buy → straight to navigation (no clarification)
+            for kw in sorted(_GENERIC_CROPS_KEYWORDS, key=len, reverse=True):
+                if _word_match(kw, q):
+                    logger.info(f"✅ F1 GENERIC-CROPS+BUY → NAV | keyword='{kw}' → nav_buy_crop (no UI)")
+                    return ConfirmedIntent(intent_key="nav_buy_crop", confidence=1.0, domain="navigation")
+
+            # 0c. Equipment + buy → show options (new, used, steps)
+            for kw in _EQUIPMENT_KEYWORDS:
+                if kw in q:
+                    k = kw.capitalize()
+                    has_used = any(h in q for h in ["used", "second hand", "juno", "purano", "old", "જૂનું", "જૂના", "પૂરાણું"])
+                    opt_new  = ClarificationOption(f"New {k} from K-Shop",              "🏪", "equipment_kshop", "kshop")
+                    opt_used = ClarificationOption(f"Used {k} on Buy/Sell marketplace", "🔄", "equipment_used",  "buy_sell")
+                    opt_nav  = ClarificationOption(f"Steps to buy {k} (new & used)",    "📋", "nav_buy_kshop",   "navigation")
+                    opts = [opt_used, opt_new, opt_nav] if has_used else [opt_new, opt_used, opt_nav]
+                    logger.info(f"🔔 F1 EQUIP+BUY INTENT | keyword='{kw}' → showing 3 options")
+                    return ClarificationRequest(
+                        question=f"What would you like to know about buying {k}?",
+                        options=opts,
+                        scenario="equipment_buy_intent",
+                        matched_keyword=kw,
+                    )
+
+            # Buy intent present but no crop/equipment/product keyword matched.
+            # Fall through to nav bypass and normal flow below.
+
+        # ══════════════════════════════════════════════════════════════════
+        # Step 1: Navigation bypass
+        # ══════════════════════════════════════════════════════════════════
+        if _is_navigation_query(q):
+            logger.info(f"✅ F1 NAV BYPASS — navigation question detected: {user_query[:60]!r}")
+            return None
+
+        # ══════════════════════════════════════════════════════════════════
+        # Step 2: Crop short-circuit (NON-buy queries only — buy handled above)
+        # ══════════════════════════════════════════════════════════════════
+
+        # 2a. Specific crop name
         for kw in sorted(_CROP_KEYWORDS, key=len, reverse=True):
             if not _word_match(kw, q):
                 continue
 
-            # Seed override: user said "seed" AND this crop has seed data in DB
+            # Seed override
             kw_low   = kw.lower()
             kw_check = _GU_TO_EN_CROPS.get(kw_low, kw_low)
             crop_has_seed_data = (
@@ -639,33 +747,20 @@ class ConfirmationLayer:
                 logger.info(f"✅ F1 CROP→SEED | keyword='{kw}' (has seed data) → seed_info")
                 return ConfirmedIntent(intent_key="seed_info", confidence=1.0, domain="seed_info")
 
-            # Default for all crop queries (including "onion seed" where seed data absent)
             logger.info(f"✅ F1 CROP→PRICE | keyword='{kw}' → crop_price")
             return ConfirmedIntent(intent_key="crop_price", confidence=1.0, domain="crop_price")
 
-        # 1b. Generic "crops" category word — no specific crop named.
-        # Always crop_price (can't check seed whitelist without a specific crop).
+        # 2b. Generic "crops" category word
         for kw in sorted(_GENERIC_CROPS_KEYWORDS, key=len, reverse=True):
             if _word_match(kw, q):
                 logger.info(f"✅ F1 GENERIC-CROPS | keyword='{kw}' → crop_price")
                 return ConfirmedIntent(intent_key="crop_price", confidence=1.0, domain="crop_price")
 
-        # ── Step 1c: Mechanism / process query bypass ──────────────────
-        # When the user is asking HOW SOMETHING WORKS conceptually (not asking
-        # for data), let the route agent decide. Without this bypass, words
-        # like "ખરીદ" (buy) and "વેચ" (sell) score high for buy_sell_product
-        # and force SQL flow — but the user is asking about the PROCESS, not
-        # requesting actual listings.
-        #
-        # Indicators: "પ્રક્રિયા" (process), "કામ કરે છે" (works),
-        # "થાય છે" (happens), "how does", "process work"
+        # ── Step 2c: Mechanism / process query bypass ─────────────────────
         _MECHANISM_SIGNALS = [
-            # Gujarati script
             "કામ કરે છે", "કામ કરે", "થાય છે",
             "પ્રક્રિયા કેવી", "પ્રક્રિયા શું",
-            # English
             "how does", "how is", "process work",
-            # Romanized Gujarati
             "kaam kare che", "kaam kare", "thay che",
             "prakriya kevi", "prakriya shu",
         ]
@@ -673,7 +768,9 @@ class ConfirmationLayer:
             logger.info(f"✅ F1 MECHANISM BYPASS — conceptual query, letting route agent decide: {user_query[:60]!r}")
             return None
 
-        # ── Step 2: Confidence scoring (non-crop, non-mechanism queries) ──
+        # ══════════════════════════════════════════════════════════════════
+        # Step 3: Confidence scoring (non-crop, non-buy, non-mechanism)
+        # ══════════════════════════════════════════════════════════════════
         scored = _score_query(q)
         if scored:
             intent_key, confidence = scored
@@ -681,9 +778,11 @@ class ConfirmationLayer:
                 logger.info(f"✅ F1 BYPASSED | intent={intent_key} confidence={confidence:.0%}")
                 return ConfirmedIntent(intent_key=intent_key, confidence=confidence, domain=intent_key)
 
-        # ── Step 2: Scenario keyword matching ────────────────────────────
+        # ══════════════════════════════════════════════════════════════════
+        # Step 4: Remaining scenario keyword matching
+        # ══════════════════════════════════════════════════════════════════
 
-        # Scenario 1: Crop name
+        # Scenario 1: Crop name (redundant with Step 2 but kept as safety net)
         for kw in _CROP_KEYWORDS:
             if kw in q:
                 logger.info(f"✅ F1 CROP BYPASS | keyword='{kw}' → crop_price direct (no clarification)")

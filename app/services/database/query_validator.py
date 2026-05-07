@@ -236,7 +236,8 @@ class QueryValidator:
     @staticmethod
     def _clean_query(query: str) -> str:
         """
-        Clean query by removing comments and normalizing whitespace.
+        Clean query by removing comments, backslash continuations,
+        and normalizing whitespace.
         
         Args:
             query: Raw SQL query
@@ -249,6 +250,11 @@ class QueryValidator:
         
         # Remove multi-line comments (/* ... */)
         query = re.sub(r'/\*.*?\*/', '', query, flags=re.DOTALL)
+        
+        # Remove backslash line continuations — LLMs sometimes generate
+        # multi-line SQL with \ at end of lines inside JSON strings.
+        # MySQL doesn't understand \ as line continuation and throws 1064.
+        query = query.replace('\\', ' ')
         
         # Normalize whitespace
         query = ' '.join(query.split())
