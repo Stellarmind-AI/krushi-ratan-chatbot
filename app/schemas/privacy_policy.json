@@ -27,15 +27,22 @@
     "video_comments",
     "video_posts",
     "weights",
-    "yards"
+    "yards",
+    "media",
+    "mediables"
   ],
-  "join_only_tables": { },
+  "join_only_tables": {
+    "media": {
+      "allowed_columns": ["id", "filename", "extension"]
+    },
+    "mediables": {
+      "allowed_columns": ["id", "media_id", "mediable_id", "mediable_type"]
+    }
+  },
   "excluded_tables": [
     "buy_sell_orders",
     "company_orders",
     "farmer_orders",
-    "media",
-    "mediables",
     "notifications",
     "settings",
     "user_otps",

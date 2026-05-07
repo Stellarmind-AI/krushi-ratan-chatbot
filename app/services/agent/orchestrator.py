@@ -918,37 +918,47 @@ RULES:
         WHERE kp.deleted_at IS NULL AND kp.status = 1
         AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE (name LIKE '%weeder%' OR name LIKE '%વીડર%' OR name LIKE '%power weeder%') AND deleted_at IS NULL)
 
-13. IMAGE COLUMNS — ALWAYS INCLUDE IN SELECT:
-    For every table (primary or JOINed) whose COLUMNS list includes a column named
-    exactly `img`, `image`, or `images`, you MUST include that column in the SELECT.
-    Use the table alias if one is used in the query.
-    Rules:
-      a) Primary table has `img`/`image`/`images` → include as `alias.img` or `alias.image` or `alias.images`
-      b) JOINed table has `img`/`image` → include as `joined_alias.img AS <joined_table>_img`
-         Example: sub_categories aliased as `sc` has `img` → SELECT sc.img AS crop_img
-         Example: kshop_categories aliased as `kc` has `img` → SELECT kc.img AS category_img
-         Example: buy_sell_categories aliased as `bc` has `image` → SELECT bc.image AS category_image
-      c) buy_sell_products has `images` (JSON array of product photos) → always include as `bp.images`
-    This rule is MANDATORY — never omit img/image/images columns when they exist in the COLUMNS block.
-    Do NOT rename these columns arbitrarily — use the aliases shown above.
+13. IMAGE COLUMNS — MANDATORY, TABLE-SPECIFIC RULES:
+    The frontend needs images for product results. Image extraction differs per
+    primary table — follow these patterns EXACTLY. Never project a literal
+    `bp.images` column (legacy/unused). Never invent image columns that aren't
+    listed below.
 
-13. IMAGE COLUMNS — MANDATORY INCLUSION:
-    The JOINS block above annotates lines with "-- img cols: X" wherever the
-    referenced table has an img/image/images column.  For EVERY such annotation,
-    you MUST include that column in the SELECT list using the table alias.
-    Naming convention:
-      alias.img       AS  <joined_table_short>_img      (e.g. sc.img  AS crop_img)
-      alias.image     AS  <joined_table_short>_image    (e.g. bc.image AS category_image)
-      alias.images    → include as-is (e.g. bp.images)
-    Also include img/image/images from the PRIMARY table itself when present.
-    Examples:
-      products JOIN sub_categories (-- img cols: img)  →  SELECT sc.img AS crop_img
-      buy_sell_products LEFT JOIN buy_sell_categories (-- img cols: image)  →  SELECT bc.image AS category_image
-      buy_sell_products has images column  →  SELECT bp.images
-      kshop_products LEFT JOIN kshop_categories (-- img cols: img)  →  SELECT kc.img AS category_img
-      kshop_products JOIN kshop_companies (-- img cols: img)  →  SELECT kco.img AS company_img
-    This rule is MANDATORY — never omit an img/image/images column when the JOIN
-    annotation signals it exists.  The frontend requires these columns to display images.
+    A) PRIMARY TABLE = buy_sell_products:
+       Product images are stored INSIDE the `form_data` JSON column under key
+       'Images' (a JSON array of filenames). You MUST add this projection:
+           JSON_EXTRACT(bp.form_data, '$.Images') AS product_images
+       Also include the category thumbnail when JOINing buy_sell_categories:
+           bc.image AS category_image
+       Do NOT select bp.images — that column is legacy.
+
+    B) PRIMARY TABLE = kshop_products:
+       kshop_products has NO direct image column. Product images live in the
+       `media` table linked via the polymorphic `mediables` table. You MUST
+       add these JOINs and projection:
+           LEFT JOIN mediables mb ON mb.mediable_id = kp.id
+                                  AND mb.mediable_type LIKE 'App%KshopProduct'
+           LEFT JOIN media m ON m.id = mb.media_id
+           ...
+           SELECT ..., CONCAT(m.filename, '.', m.extension) AS product_image
+       Also include category thumbnail when JOINing kshop_categories:
+           kc.img AS category_img
+       IMPORTANT: use `LIKE 'App%KshopProduct'` — never `=` with a backslash
+       string literal. The DB stores `App\Models\KshopProduct` with literal
+       backslashes; equality with a backslash literal is unreliable across
+       JSON/MySQL escape layers, while the LIKE pattern is exact (no other
+       Laravel model ends in `KshopProduct`) and has no escape issues.
+
+    C) OTHER tables (products / sub_categories / etc.):
+       For any JOINed table whose COLUMNS list contains a column literally named
+       `img`, `image`, or `images`, project it using the table alias with a
+       deterministic suffix alias:
+           alias.img    AS <joined_table>_img      (e.g. sc.img  AS crop_img)
+           alias.image  AS <joined_table>_image    (e.g. bc.image AS category_image)
+
+    These rules are MANDATORY. The frontend requires these exact column aliases
+    (product_images / product_image / category_image / category_img / crop_img)
+    to render images.
 
 OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
 [{{"table_name": "primary_table", "sql": "SELECT ... FROM ... WHERE ..."}}]"""
@@ -1139,10 +1149,16 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
         Parses the pre-compiled schema to:
           1. Include JOIN clauses so FK columns resolve to human-readable names
           2. Replace raw _id columns with joined_table.name in SELECT
-          3. Project img/image/images columns from BOTH the primary table and
-             every JOINed table (annotated as "-- img cols: X" by
-             _build_compiled_schemas) so the frontend always receives image
-             data — same coverage as the LLM-generated SQL path (Rule 13).
+          3. Project image data using table-specific patterns (Rule 13):
+             - buy_sell_products → JSON_EXTRACT(form_data, '$.Images')
+                 (the standalone `images` column is legacy and skipped)
+             - kshop_products    → LEFT JOIN mediables (polymorphic,
+                 mediable_type LIKE 'App%KshopProduct') + media,
+                 then CONCAT(filename, '.', extension) AS product_image
+             - Joined category/sub-category tables annotated with
+                 "-- img cols: X" by _build_compiled_schemas → projected
+                 with deterministic alias (e.g. bc.image AS category_image,
+                 kc.img AS category_img, sc.img AS sub_categories_img)
           4. Skip metadata columns (id, updated_at, deleted_at, status) for
              cleaner output
 
@@ -1254,12 +1270,36 @@ OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
                         seen_refs.add(ref_table)
                     # Don't also select the raw _id
                 elif col in img_col_names:
-                    # Primary-table image column → image bucket (mandatory)
-                    image_parts.append(f"{primary_table}.{col}")
+                    # Skip primary-table img/image/images columns — image
+                    # extraction for product tables is handled by the
+                    # table-specific patterns below (form_data JSON for
+                    # buy_sell_products, mediables+media JOIN for kshop_products).
+                    # The legacy `images` column on buy_sell_products is unused.
+                    continue
                 elif col in priority_col_names:
                     priority_parts.append(f"{primary_table}.{col}")
                 else:
                     other_parts.append(f"{primary_table}.{col}")
+
+        # ── Table-specific PRIMARY image patterns ──────────────────────────
+        # buy_sell_products → product_images come from form_data JSON column.
+        # kshop_products    → product_image via mediables (polymorphic) → media.
+        # Both go into the image bucket (mandatory, never trimmed).
+        if primary_table == "buy_sell_products":
+            image_parts.append(
+                "JSON_EXTRACT(buy_sell_products.form_data, '$.Images') AS product_images"
+            )
+        elif primary_table == "kshop_products":
+            join_clauses.append(
+                "LEFT JOIN mediables ON mediables.mediable_id = kshop_products.id "
+                "AND mediables.mediable_type LIKE 'App%KshopProduct'"
+            )
+            join_clauses.append(
+                "LEFT JOIN media ON media.id = mediables.media_id"
+            )
+            image_parts.append(
+                "CONCAT(media.filename, '.', media.extension) AS product_image"
+            )
 
         # Priority + image always included. Other fills remaining slots.
         select_parts: List[str] = priority_parts + image_parts

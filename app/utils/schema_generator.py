@@ -324,6 +324,22 @@ class SchemaGenerator:
             notes.append("Product names in GUJARATI SCRIPT — search both scripts: WHERE name LIKE '%keyword%' OR name LIKE '%gujarati%'")
             notes.append("STRIP intent words before search (mare=I want, karvu=to do, che=is, purchase, from, kshop) — these are NOT product keywords")
             notes.append("Search each keyword INDEPENDENTLY with OR — never full phrase LIKE")
+        if table_name == "buy_sell_products":
+            notes.append(
+                "IMAGE COLUMN — product photos are stored INSIDE the form_data JSON column under key 'Images' (a JSON array). "
+                "To return product images you MUST select: JSON_EXTRACT(bp.form_data, '$.Images') AS product_images. "
+                "The standalone `images` column is legacy and should NOT be projected."
+            )
+            notes.append("Always also include bc.image AS category_image when JOINing buy_sell_categories (category thumbnail).")
+        if table_name == "kshop_products":
+            notes.append(
+                "IMAGE COLUMN — kshop_products has NO direct image column. Product images live in the `media` table, "
+                "linked through the polymorphic `mediables` table. To return product images you MUST add: "
+                "LEFT JOIN mediables mb ON mb.mediable_id = kp.id AND mb.mediable_type LIKE 'App%KshopProduct' "
+                "LEFT JOIN media m ON m.id = mb.media_id, then SELECT CONCAT(m.filename, '.', m.extension) AS product_image. "
+                "Use LIKE 'App%KshopProduct' (NOT a backslash equality literal) — backslash escaping through JSON/MySQL is unreliable."
+            )
+            notes.append("Always also include kc.img AS category_img when JOINing kshop_categories (category thumbnail).")
         if table_name == "products":
             notes.append("Crop price table — JOIN yards→cities to filter by location, ORDER BY price_date DESC for latest")
 
@@ -346,24 +362,35 @@ class SchemaGenerator:
     def _build_example_queries(self, table_name: str, safe_columns: Optional[List[str]] = None) -> List[str]:
         examples = {
             "kshop_products": [
-                "SELECT kp.id, kp.name, kp.price, kp.discount_price, kco.name AS company, kc.name AS category, kc.img AS category_img "
+                # IMAGE: kshop_products has no direct image column — resolve via
+                # mediables (polymorphic, mediable_type LIKE 'App%KshopProduct')
+                # → media (filename + extension). LIKE pattern avoids the
+                # backslash-escape fragility of equality with 'App\\Models\\X'.
+                "SELECT kp.id, kp.name, kp.price, kp.discount_price, kco.name AS company, kc.name AS category, kc.img AS category_img, "
+                "CONCAT(m.filename, '.', m.extension) AS product_image "
                 "FROM kshop_products kp "
                 "JOIN kshop_companies kco ON kp.kshop_company_id = kco.id "
                 "LEFT JOIN kshop_categories kc ON kp.kshop_category_id = kc.id AND kc.deleted_at IS NULL "
                 "LEFT JOIN kshop_weights kw ON kp.kshop_weight_id = kw.id "
+                "LEFT JOIN mediables mb ON mb.mediable_id = kp.id AND mb.mediable_type LIKE 'App%KshopProduct' "
+                "LEFT JOIN media m ON m.id = mb.media_id "
                 "WHERE kp.deleted_at IS NULL AND kp.status = 1 "
-                "AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE name LIKE '%weeder%' OR name LIKE '%વીડર%' AND deleted_at IS NULL) "
+                "AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE (name LIKE '%weeder%' OR name LIKE '%વીડર%') AND deleted_at IS NULL) "
                 "ORDER BY kp.updated_at DESC LIMIT 50",
             ],
             "buy_sell_products": [
                 # NOTE: No status = 'active' filter here — per SQL generation Rule #12,
                 # status filtering is handled by the post-retrieval status_filter layer.
                 # Adding it in SQL would silently exclude 'sold_out' and other valid states.
-                "SELECT bp.id, bp.product_name, bp.price, bp.quantity_available, bp.images, bc.name AS category, bc.image AS category_image "
+                # IMAGE: product photos live INSIDE form_data JSON column under key 'Images'.
+                # The standalone `images` column is legacy — do not project it.
+                "SELECT bp.id, bp.product_name, bp.price, bp.quantity_available, "
+                "JSON_EXTRACT(bp.form_data, '$.Images') AS product_images, "
+                "bc.name AS category, bc.image AS category_image "
                 "FROM buy_sell_products bp "
                 "LEFT JOIN buy_sell_categories bc ON bp.category_id = bc.id AND bc.deleted_at IS NULL "
                 "WHERE bp.deleted_at IS NULL "
-                "AND bp.category_id IN (SELECT id FROM buy_sell_categories WHERE name LIKE '%tractor%' OR name LIKE '%ટ્રેક્ટર%' AND deleted_at IS NULL) "
+                "AND bp.category_id IN (SELECT id FROM buy_sell_categories WHERE (name LIKE '%tractor%' OR name LIKE '%ટ્રેક્ટર%') AND deleted_at IS NULL) "
                 "ORDER BY bp.created_at DESC LIMIT 50",
             ],
             "products": [
