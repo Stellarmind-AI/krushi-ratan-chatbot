@@ -11,6 +11,7 @@ from app.services.database.query_validator import query_validator
 from app.models.chat_models import QueryResult
 from app.core.logger import get_database_logger
 from app.utils.privacy_policy import get_privacy_policy
+from app.utils.image_url_resolver import resolve_images_in_rows
 
 logger = get_database_logger()
 
@@ -79,6 +80,14 @@ class QueryExecutor:
             # answer generation, or API responses can see them.
             raw_rows = list(results) if results else []
             rows = get_privacy_policy().sanitize_rows(raw_rows)
+
+            # Rewrite image-name fields (product_image, product_images,
+            # category_img, category_image, crop_img, <table>_img|image|images)
+            # into full S3 URLs.  Single transform site so the LLM context,
+            # status filter, cache replay, and frontend WebSocket payload all
+            # see URLs — never raw filenames.  Pass-through on anything we
+            # cannot confidently parse, so unknown fields are unaffected.
+            rows = resolve_images_in_rows(rows)
 
             # Log only safe metadata, never raw DB payload values.
             try:
