@@ -319,8 +319,18 @@ class ChatHandler:
         history.messages.append(ChatMessage(role="assistant", content=final_answer))
         history.updated_at = datetime.now()
 
-        query_data          = self._build_query_data(result, key="query_results")
-        query_data_filtered = self._build_query_data(result, key="query_results_filtered")
+        # Frontend contract: a single `query_data` field carrying the
+        # post-status-filter rows (what the LLM saw and what's safe to
+        # render).  When the status-filter step didn't run — non-SQL
+        # flows (NAVIGATION/GENERAL/GREETING) and SQL fast-paths
+        # (no-data / not-found / sql-disabled) — `query_results_filtered`
+        # is absent from the orchestrator result; we fall back to the raw
+        # `query_results` so `query_data` is always the canonical view.
+        # `query_data_filtered` was the old dual-shipping field — removed
+        # so the wire format stays single-shape across all flows.
+        query_data = self._build_query_data(result, key="query_results_filtered")
+        if not query_data:
+            query_data = self._build_query_data(result, key="query_results")
 
         try:
             text_msg = {
@@ -333,7 +343,6 @@ class ChatHandler:
                 "cache_hit":           result.get("cache_hit", False),
                 "timestamp":           datetime.now().isoformat(),
                 "query_data":          _safe_serialize(query_data),
-                "query_data_filtered": _safe_serialize(query_data_filtered),
             }
             await ws.send_text(json.dumps(text_msg, ensure_ascii=False))
         except Exception as e:
@@ -349,13 +358,17 @@ class ChatHandler:
                     cached=result.get("cache_hit", False))
 
     @staticmethod
-    def _build_query_data(result: dict, key: str = "query_results") -> dict:
+    def _build_query_data(result: dict, key: str = "query_results_filtered") -> dict:
         """
-        Build a structured dict of raw DB rows keyed by table name.
+        Build a structured dict of DB rows keyed by table name.
 
         key  — which result list to read from the orchestrator result dict:
-                "query_results"          -> raw rows (all statuses)
-                "query_results_filtered" -> rows after status filter (what LLM saw)
+                "query_results_filtered" (default) -> rows after status filter
+                                                       (what LLM saw — canonical
+                                                       view shipped to frontend)
+                "query_results"                    -> raw rows (all statuses);
+                                                       used as fallback for flows
+                                                       that don't run the filter
 
         Returns {} for NAVIGATION / GENERAL / GREETING flows (no DB query runs).
         """
