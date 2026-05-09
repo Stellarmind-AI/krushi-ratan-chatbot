@@ -341,7 +341,24 @@ class SchemaGenerator:
             )
             notes.append("Always also include kc.img AS category_img when JOINing kshop_categories (category thumbnail).")
         if table_name == "products":
-            notes.append("Crop price table — JOIN yards→cities to filter by location, ORDER BY price_date DESC for latest")
+            notes.append("Crop price table — JOIN yards→cities AND yards→talukas to filter by location, ORDER BY price_date DESC for latest")
+            notes.append(
+                "LOCATION FILTER RULE: A user-supplied location name may be a city, a taluka, or a yard name. "
+                "ALWAYS match against ALL THREE name columns with OR — cities.name, talukas.name, AND yards.name — "
+                "in BOTH English and Gujarati script. Example: '%Mahuva%' OR '%મહુવા%' OR '%mahuva%' against c.name AND t.name AND y.name. "
+                "NEVER filter only on cities.name — talukas like મહુવા are not cities and would be missed."
+            )
+            notes.append(
+                "LOCATION FK CHAIN: products.yard_id → yards (has city_id, taluka_id, state_id). "
+                "To filter by taluka, JOIN talukas via y.taluka_id. To filter by city, JOIN cities via y.city_id. "
+                "Both joins should be LEFT JOIN (some yards may have nullable city_id/taluka_id)."
+            )
+            notes.append(
+                "MULTI-TALUKA RULE: When the user names a CITY (e.g. Bhavnagar), include all yards in that city — "
+                "which means all yards across all talukas under that city_id. Do NOT additionally filter by "
+                "taluka.name = city.name; just match c.name (and let the FK chain include every yard with that "
+                "city_id automatically)."
+            )
 
         return {
             "tool_name":      f"query_{table_name}",
@@ -394,16 +411,33 @@ class SchemaGenerator:
                 "ORDER BY bp.created_at DESC LIMIT 50",
             ],
             "products": [
-                "SELECT sc.name AS crop, sc.img AS crop_img, p.min_price, p.max_price, p.price_date, y.name AS yard, c.name AS city "
+                # Crop + city — must JOIN talukas too AND match against city/taluka/yard
+                # name columns with OR. Krushi Ratn yards live in talukas; a yard whose
+                # taluka equals the user-typed city would otherwise be missed.
+                "SELECT sc.name AS crop, sc.img AS crop_img, p.min_price, p.max_price, p.price_date, y.name AS yard, c.name AS city, t.name AS taluka "
                 "FROM products p "
                 "JOIN sub_categories sc ON p.subcategory_id = sc.id "
                 "JOIN yards y ON p.yard_id = y.id "
-                "JOIN cities c ON y.city_id = c.id "
+                "LEFT JOIN cities c ON y.city_id = c.id "
+                "LEFT JOIN talukas t ON y.taluka_id = t.id "
                 "LEFT JOIN weights w ON p.weight_id = w.id "
                 "WHERE p.deleted_at IS NULL "
                 "AND (sc.name LIKE '%kapas%' OR sc.name LIKE '%કપાસ%' OR p.subcategory_name LIKE '%kapas%') "
-                "AND (c.name LIKE '%Bhavnagar%' OR c.name LIKE '%ભાવનગર%') "
-                "ORDER BY p.price_date DESC LIMIT 20",
+                "AND (c.name LIKE '%Bhavnagar%' OR c.name LIKE '%ભાવનગર%' OR t.name LIKE '%Bhavnagar%' OR t.name LIKE '%ભાવનગર%' OR y.name LIKE '%Bhavnagar%' OR y.name LIKE '%ભાવનગર%') "
+                "ORDER BY p.price_date DESC LIMIT 50",
+                # Crop + taluka (e.g. onion in મહુવા) — taluka name must be matched on
+                # talukas.name through yards.taluka_id; matching only cities.name would
+                # silently miss every yard whose city.name differs from the taluka name.
+                "SELECT sc.name AS crop, sc.img AS crop_img, p.min_price, p.max_price, p.price_date, y.name AS yard, c.name AS city, t.name AS taluka "
+                "FROM products p "
+                "JOIN sub_categories sc ON p.subcategory_id = sc.id "
+                "JOIN yards y ON p.yard_id = y.id "
+                "LEFT JOIN cities c ON y.city_id = c.id "
+                "LEFT JOIN talukas t ON y.taluka_id = t.id "
+                "WHERE p.deleted_at IS NULL "
+                "AND (sc.name LIKE '%onion%' OR sc.name LIKE '%ડુંગળી%' OR sc.name LIKE '%dungli%' OR p.subcategory_name LIKE '%onion%') "
+                "AND (t.name LIKE '%Mahuva%' OR t.name LIKE '%મહુવા%' OR c.name LIKE '%Mahuva%' OR c.name LIKE '%મહુવા%' OR y.name LIKE '%Mahuva%' OR y.name LIKE '%મહુવા%') "
+                "ORDER BY p.price_date DESC LIMIT 50",
             ],
         }
         if table_name in examples:
