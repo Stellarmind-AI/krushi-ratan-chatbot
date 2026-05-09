@@ -741,235 +741,138 @@ class Orchestrator:
         if intent_note:
             intent_note_block = f"\nINTENT CONFIRMED BY USER:\n  {intent_note}\n"
 
+        # Conditional rule blocks — only include when relevant tables are selected.
+        _has_buy_sell = "buy_sell_products" in selected_tools or "query_buy_sell_products" in selected_tools
+        _has_kshop    = "kshop_products" in selected_tools or "query_kshop_products" in selected_tools
+
+        category_rule_block = ""
+        if _has_buy_sell or _has_kshop:
+            parts = []
+            if _has_buy_sell:
+                parts.append(
+                    "  • buy_sell_products: NEVER filter on bp.product_name (user-entered, unreliable). Use:\n"
+                    "      bp.category_id IN (SELECT id FROM buy_sell_categories\n"
+                    "                          WHERE (name LIKE '%kw%' OR name LIKE '%gujarati%') AND deleted_at IS NULL)"
+                )
+            if _has_kshop:
+                parts.append(
+                    "  • kshop_products: NEVER filter on kp.name (user-entered, unreliable). Use:\n"
+                    "      kp.kshop_category_id IN (SELECT id FROM kshop_categories\n"
+                    "                                WHERE (name LIKE '%kw%' OR name LIKE '%gujarati%') AND deleted_at IS NULL)"
+                )
+            category_rule_block = (
+                "12. CATEGORY-BASED FILTERING (ABSOLUTE — no exceptions):\n"
+                + "\n".join(parts) + "\n"
+                "    Apply ALL keyword variants from KEYWORD SEARCH VARIANTS inside the subquery WHERE.\n"
+            )
+
+        image_rule_block = ""
+        if _has_buy_sell or _has_kshop:
+            img_lines = ["13. IMAGE COLUMNS (frontend-required aliases — exact match):"]
+            if _has_buy_sell:
+                img_lines.append(
+                    "  • buy_sell_products: SELECT JSON_EXTRACT(bp.form_data, '$.Images') AS product_images,\n"
+                    "    bc.image AS category_image. Do NOT select bp.images (legacy)."
+                )
+            if _has_kshop:
+                img_lines.append(
+                    "  • kshop_products: kshop_products has NO direct image column. JOIN media via mediables:\n"
+                    "      LEFT JOIN mediables mb ON mb.mediable_id = kp.id AND mb.mediable_type LIKE 'App%KshopProduct'\n"
+                    "      LEFT JOIN media m ON m.id = mb.media_id\n"
+                    "    SELECT CONCAT(m.filename, '.', m.extension) AS product_image, kc.img AS category_img.\n"
+                    "    Use LIKE 'App%KshopProduct' (NEVER `=` with backslash literal — escape layers break it)."
+                )
+            img_lines.append(
+                "  • Other JOINed tables: project img/image columns with suffix alias\n"
+                "    (e.g. sc.img AS crop_img, bc.image AS category_image)."
+            )
+            image_rule_block = "\n".join(img_lines) + "\n"
+
+        # ── PREFIX-CACHE LAYOUT ────────────────────────────────────────────
+        # System prompt is kept BYTE-IDENTICAL across queries (modulo 4 fixed
+        # combinations of the conditional category/image blocks). Per-query
+        # dynamic data (compact_schema, intent_note, keyword_hint, user query)
+        # is moved to the user message so OpenAI's automatic prefix cache can
+        # hit on the system prefix and discount it after the first call.
         system_prompt = f"""You are a MySQL query generator for Krushi Ratn agricultural app.
 
-TABLES:
-{compact_schema}{intent_note_block}{keyword_hint_block}
-
 RULES:
-0. SQL FORMATTING — CRITICAL (BOTH RULES MANDATORY):
-   a) SINGLE-LINE SQL — The entire SQL value MUST be ONE continuous string:
-      • Write ALL clauses on a single line separated by spaces (SELECT ... FROM ... WHERE ...)
-      • NEVER put a literal newline inside a JSON string value — it makes JSON invalid
-      • NEVER use backslash (\\\\) at end of line — not valid in JSON or MySQL
-      • NEVER use + to concatenate SQL string pieces — not valid JSON
-      • INCORRECT: "sql": "SELECT col\\\\\n  FROM t"  or  "SELECT col " + "FROM t"
-      • CORRECT:   "sql": "SELECT p.id, p.name FROM products p JOIN sub_categories sc ON p.subcategory_id = sc.id WHERE p.deleted_at IS NULL"
-   b) TABLE QUALIFICATION — ALWAYS prefix SELECT columns with table name or alias:
-      • When query has JOINs, EVERY column in SELECT must include its table name or alias
-      • INCORRECT: SELECT id, title, description FROM news JOIN states ... (bare column names)
-      • CORRECT:   SELECT news.id, news.title, news.description FROM news JOIN states ... (qualified)
-      • Use table aliases for brevity: SELECT n.id, n.title, s.name FROM news n JOIN states s ...
-      • This prevents MySQL ambiguity errors when the same column exists in multiple tables
-      • Exception: aggregate functions like COUNT(*), SUM(col) can stay unqualified if column is unique
-      
-1. ENUMERATION QUERIES — CHECK FIRST: If the user is asking for the LIST / SET of
-   items the app tracks in a category (NOT a specific item by name), use SELECT DISTINCT
-   on the descriptive name column with NO keyword LIKE filter on the category word.
-   Trigger phrases: "list all X", "show all X", "show list of X", "what X are available",
-   "what all X are there", "give me all X", "enumerate X", "kayi X uplabdh che",
-   "X ni list batao", "બધા X બતાવો", "બતાવો બધા X".
-   The category word itself (crops, yards, cities, products, news) is the CATEGORY, NOT
-   a value to LIKE-search. Do NOT write LIKE '%crop%' or LIKE '%yard%'.
-   Pattern:
-     SELECT DISTINCT <name_col> AS <alias>
-     FROM <primary_table> [JOINs as needed for descriptive name]
-     WHERE <primary_table>.deleted_at IS NULL
-     ORDER BY <name_col> ASC
-     LIMIT 100;
-   Examples:
-     "list all crops" / "show crops in krushiratn" / "what crops are available" →
-       SELECT DISTINCT sc.name AS crop
-       FROM products p
-       JOIN sub_categories sc ON p.subcategory_id = sc.id
-       WHERE p.deleted_at IS NULL
-       ORDER BY sc.name ASC LIMIT 100;
-     "show all yards" / "list yards" →
-       SELECT DISTINCT y.name AS yard
-       FROM yards y
-       WHERE y.deleted_at IS NULL
-       ORDER BY y.name ASC LIMIT 100;
-     "what cities does the app cover" / "list all cities" →
-       SELECT DISTINCT c.name AS city
-       FROM cities c
-       WHERE c.deleted_at IS NULL
-       ORDER BY c.name ASC LIMIT 100;
-   This rule OVERRIDES rules 3 and 4 for enumeration queries — those rules apply only
-   when the user names a SPECIFIC item (e.g. "kapas bhav", "balwan weeder price").
-2. Strip intent words before extracting product keywords:
-   intent words = mare, maro, karvu, karu, che, purchase, from, kshop, levu, joiye, apo, batao, please
-3. Search each keyword INDEPENDENTLY with OR — never use full phrase LIKE
-4. PRODUCT / CROP / EQUIPMENT KEYWORDS — MULTILINGUAL SEARCH (CRITICAL):
-   The database stores text in BOTH Gujarati script (PRIMARY) AND English/Romanized.
-   Every keyword search MUST cover both forms or rows will silently be missed.
+0. SQL FORMATTING:
+   a) SINGLE-LINE SQL — entire SQL value is ONE continuous string. No literal newlines,
+      no backslashes, no `+` concatenation in JSON. CORRECT example:
+      "sql": "SELECT p.id FROM products p WHERE p.deleted_at IS NULL"
+   b) TABLE QUALIFICATION — every SELECT column qualified with table/alias when JOINs present.
+      INCORRECT: SELECT id, title FROM news JOIN states ...
+      CORRECT:   SELECT n.id, n.title FROM news n JOIN states s ...
+      Aggregates (COUNT(*), SUM(col)) may be unqualified if column is unique.
 
-   a) AUTHORITATIVE OVERRIDE — if a "KEYWORD SEARCH VARIANTS" section is present
-      above, use ONLY the variants listed there. Do NOT add your own translations.
-      Example: section shows "'onion' → ['onion', 'dungli', 'kanda', 'ડુંગળી']" —
-      your WHERE must search for those four strings and nothing else.
-      Do NOT invent 'કાંદા', 'प्याज', or any other equivalent.
+1. ENUMERATION — if user asks for the LIST/SET of items the app tracks (NOT a specific item):
+   "list all X", "show all X", "what X are available", "બધા X બતાવો", "kayi X uplabdh che".
+   Use SELECT DISTINCT on the descriptive name column with NO LIKE filter on the category word.
+   Pattern: SELECT DISTINCT <name_col> AS <alias> FROM <table> [JOINs] WHERE deleted_at IS NULL ORDER BY <name_col> ASC LIMIT 100.
+   Example: "list all crops" → SELECT DISTINCT sc.name AS crop FROM products p JOIN sub_categories sc ON p.subcategory_id = sc.id WHERE p.deleted_at IS NULL ORDER BY sc.name LIMIT 100.
+   Overrides rules 3 and 4 for enumeration only — applies when user did NOT name a specific item.
 
-   b) NO VARIANTS SECTION → GENERATE GUJARATI YOURSELF:
-      For every keyword in the user query (product, crop, equipment, technical term):
-      • Always include the user's original form (as typed)
-      • Always include the Gujarati script equivalent
-      • If the user typed Gujarati script, also include the Romanized form
+2. Strip intent words from query before extracting keywords:
+   mare, maro, karvu, karu, che, purchase, from, levu, joiye, apo, batao, please.
 
-      ⚠️ CRITICAL — GUJARATI, NOT HINDI:
-      The database stores GUJARATI words. Hindi words are WRONG even when written
-      in Gujarati script. For traditional crops/vegetables/fruits where the Hindi
-      and Gujarati words differ, follow this table strictly:
+3. Search each keyword INDEPENDENTLY with OR — never full-phrase LIKE.
 
-        Concept       Gujarati ✓         Hindi ✗ (do NOT use)
-        ───────────────────────────────────────────────────────
-        onion         ડુંગળી              કાંદા / प्याज
-        tomato        ટામેટા              ટમાટર / टमाटर
-        potato        બટાકા               આલુ / आलू
-        garlic        લસણ                 લહસુન / लहसुन
-        rice          ચોખા / ડાંગર         ચાવલ / चावल
+4. MULTILINGUAL KEYWORD SEARCH (CRITICAL — DB stores Gujarati script PRIMARILY):
+   a) If a "KEYWORD SEARCH VARIANTS" section is present above, use ONLY those variants.
+      Do NOT invent extras (e.g. don't add 'કાંદા' if 'ડુંગળી' is the listed onion variant).
+   b) If no variants section, generate Gujarati yourself:
+      • Always include the user's original form, the Gujarati script equivalent, and
+        the Romanized form if user typed Gujarati script.
+      • CRITICAL — DB stores GUJARATI words, NOT Hindi. Use Gujarati where they differ:
+          onion = ડુંગળી (NOT કાંદા/प्याज)   tomato = ટામેટા (NOT ટમાટર/टमाटर)
+          potato = બટાકા (NOT આલુ/आलू)       garlic = લસણ (NOT લહસુન/लहसुन)
+          rice = ચોખા / ડાંગર (NOT ચાવલ/चावल)
+      • Equipment terms — phonetic transliteration to Gujarati script:
+          motor→મોટર, tractor→ટ્રેક્ટર, pump→પંપ, sprayer→સ્પ્રેયર,
+          thresher→થ્રેસર, harvester→હાર્વેસ્ટર, weeder→વીડર, seeder→સીડર.
+        For unknown words, transliterate phonetically.
+      • Form: name LIKE '%motor%' OR name LIKE '%મોટર%'.
 
-      For TECHNICAL / EQUIPMENT terms, use phonetic transliteration to Gujarati script:
+5. JOINS — for every primary table, copy its JOINS block verbatim (JOIN vs LEFT JOIN
+   exactly as shown). In SELECT, return joined tables' descriptive columns (yards.name,
+   sub_categories.name, cities.name, kshop_companies.name) NOT raw *_id columns. Short
+   aliases (p, y, sc, c, kp, kco, kc, kw, bp, u, n, vp) are fine. Chain transitively —
+   e.g. products→yards→{{cities,talukas}} for location, follow the full FK path.
 
-        English      Gujarati script
-        ────────────────────────────
-        motor       → મોટર
-        tractor     → ટ્રેક્ટર
-        pump        → પંપ
-        sprayer     → સ્પ્રેયર
-        thresher    → થ્રેસર
-        harvester   → હાર્વેસ્ટર
-        cultivator  → કલ્ટિવેટર
-        rotavator   → રોટાવેટર
-        seeder      → સીડર
+6. Always add WHERE <table>.deleted_at IS NULL (for tables that have deleted_at).
 
-      For unknown words, transliterate phonetically into Gujarati script.
-      Example WHERE forms:
-        keyword "motor"     → name LIKE '%motor%' OR name LIKE '%મોટર%'
-        keyword "harvester" → name LIKE '%harvester%' OR name LIKE '%હાર્વેસ્ટર%'
-        keyword "ઘઉં"        → name LIKE '%ઘઉં%' OR name LIKE '%ghau%' OR name LIKE '%wheat%'
+7. STATUS COLUMN — kshop_products is the ONLY table where SQL adds a status filter
+   (AND kp.status = 1). NEVER add status/is_sold/availability conditions on any other
+   table — post-retrieval filter handles them. Adding them in SQL silently drops valid rows.
 
-   c) Search each keyword INDEPENDENTLY with OR across the full variant list —
-      NEVER use a full-phrase LIKE.
-5. JOINS — MANDATORY: for every primary table that has entries under its JOINS block,
-   (a) copy those JOIN clauses verbatim into your FROM clause (JOIN vs LEFT JOIN exactly as shown),
-   (b) in the SELECT list, return the joined tables' descriptive columns
-       (e.g. yards.name, sub_categories.name, cities.name, kshop_companies.name)
-       instead of raw foreign-key IDs (yard_id, subcategory_id, city_id, kshop_company_id).
-   Never return a *_id column to the user when the referenced table is listed as a JOIN target.
-   Short aliases are fine (p, y, sc, c, kp, kco, kc, kw, bp, u, n, vp), but every JOIN from
-   the JOINS block MUST appear whenever the referenced table has a name/title/display_name column.
-6. Always add: WHERE <table>.deleted_at IS NULL  (for tables that have deleted_at)
-7. For kshop_products: always add AND status = 1
-8. NEVER generate SELECT * without WHERE clause
-9. NEVER generate a query with no WHERE clause
-10. LOCATION NAMES — CRITICAL:
-   a) Never use exact match (=) for location names. Always use LIKE with both English and Gujarati script.
-   b) A location name can be a YARD name, a TALUKA name, or a CITY name — you cannot know which in advance.
-      Yard names are typically named after the taluka or city they are in (e.g. yard "ગોંડલ" is in taluka "ગોંડલ").
-   c) When filtering products/prices by location, ALWAYS join yards to BOTH cities AND talukas,
-      then search ALL THREE name columns with OR:
-        LEFT JOIN cities c ON y.city_id = c.id
-        LEFT JOIN talukas t ON y.taluka_id = t.id
-        WHERE (y.name LIKE '%LocationName%' OR c.name LIKE '%LocationName%' OR t.name LIKE '%LocationName%')
-   d) Include both English and Gujarati script variants in each LIKE:
-        (y.name LIKE '%Gondal%' OR y.name LIKE '%ગોંડલ%'
-         OR c.name LIKE '%Gondal%' OR c.name LIKE '%ગોંડલ%'
-         OR t.name LIKE '%Gondal%' OR t.name LIKE '%ગોંડલ%')
-   e) NEVER filter location through only ONE of cities/talukas/yards — always search all three.
-10. STATUS COLUMN — CRITICAL: NEVER add any status condition to WHERE clause for any table
-    EXCEPT kshop_products (rule 6 above). Do NOT add AND status = 'active', AND status = 1,
-    AND is_sold = 0, or any other status/availability filter on any other table.
-    Status filtering is handled automatically after data retrieval — adding it in SQL
-    will cause rows with valid non-'active' status values (e.g. sold_out, available)
-    to be silently excluded from results.
-11. TRANSITIVE JOINS — when a table references another table that itself has JOINs,
-    chain them. For example, products→yards gives you yard_id. But yards→cities AND
-    yards→talukas give you the location. So for product location queries, your FROM clause
-    must include: products JOIN yards ON ... LEFT JOIN cities ON yards.city_id = cities.id
-    LEFT JOIN talukas ON yards.taluka_id = talukas.id. Apply this chaining for ALL tables
-    — always follow the full FK path shown in the JOINS block of each table.
+8. NEVER SELECT * without WHERE. NEVER generate a query without WHERE.
 
-12. CATEGORY-BASED FILTERING — MANDATORY FOR buy_sell_products AND kshop_products:
-    NEVER filter by buy_sell_products.product_name or kshop_products.name with LIKE.
-    These product name columns are user-entered text and DO NOT reliably contain keywords.
-    Instead, ALWAYS use a category subquery to match the keyword:
+9. LOCATION NAMES — a location may be yard, taluka, OR city name (often shared).
+   When filtering by location, ALWAYS LEFT JOIN cities AND talukas via yards, then
+   search all three name columns with OR, in BOTH English and Gujarati script:
+     LEFT JOIN cities c ON y.city_id = c.id
+     LEFT JOIN talukas t ON y.taluka_id = t.id
+     WHERE (y.name LIKE '%X%' OR c.name LIKE '%X%' OR t.name LIKE '%X%'
+            OR y.name LIKE '%ગુ%' OR c.name LIKE '%ગુ%' OR t.name LIKE '%ગુ%')
+   Never use `=` for location names. Never filter on only one of yards/cities/talukas.
 
-    For buy_sell_products:
-      bp.category_id IN (
-        SELECT id FROM buy_sell_categories
-        WHERE (name LIKE '%keyword%' OR name LIKE '%gujarati_variant%')
-        AND deleted_at IS NULL
-      )
-
-    For kshop_products:
-      kp.kshop_category_id IN (
-        SELECT id FROM kshop_categories
-        WHERE (name LIKE '%keyword%' OR name LIKE '%gujarati_variant%')
-        AND deleted_at IS NULL
-      )
-
-    Apply all keyword variants from KEYWORD SEARCH VARIANTS section inside the subquery WHERE.
-    This rule is ABSOLUTE — no exceptions for buy_sell_products and kshop_products.
-    Examples:
-      User: "tractor in buy sell" →
-        WHERE bp.deleted_at IS NULL
-        AND bp.category_id IN (SELECT id FROM buy_sell_categories WHERE (name LIKE '%tractor%' OR name LIKE '%ટ્રેક્ટર%') AND deleted_at IS NULL)
-      User: "weeder in kshop" →
-        WHERE kp.deleted_at IS NULL AND kp.status = 1
-        AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE (name LIKE '%weeder%' OR name LIKE '%વીડર%' OR name LIKE '%power weeder%') AND deleted_at IS NULL)
-
-13. IMAGE COLUMNS — MANDATORY, TABLE-SPECIFIC RULES:
-    The frontend needs images for product results. Image extraction differs per
-    primary table — follow these patterns EXACTLY. Never project a literal
-    `bp.images` column (legacy/unused). Never invent image columns that aren't
-    listed below.
-
-    A) PRIMARY TABLE = buy_sell_products:
-       Product images are stored INSIDE the `form_data` JSON column under key
-       'Images' (a JSON array of filenames). You MUST add this projection:
-           JSON_EXTRACT(bp.form_data, '$.Images') AS product_images
-       Also include the category thumbnail when JOINing buy_sell_categories:
-           bc.image AS category_image
-       Do NOT select bp.images — that column is legacy.
-
-    B) PRIMARY TABLE = kshop_products:
-       kshop_products has NO direct image column. Product images live in the
-       `media` table linked via the polymorphic `mediables` table. You MUST
-       add these JOINs and projection:
-           LEFT JOIN mediables mb ON mb.mediable_id = kp.id
-                                  AND mb.mediable_type LIKE 'App%KshopProduct'
-           LEFT JOIN media m ON m.id = mb.media_id
-           ...
-           SELECT ..., CONCAT(m.filename, '.', m.extension) AS product_image
-       Also include category thumbnail when JOINing kshop_categories:
-           kc.img AS category_img
-       IMPORTANT: use `LIKE 'App%KshopProduct'` — never `=` with a backslash
-       string literal. The DB stores `App\Models\KshopProduct` with literal
-       backslashes; equality with a backslash literal is unreliable across
-       JSON/MySQL escape layers, while the LIKE pattern is exact (no other
-       Laravel model ends in `KshopProduct`) and has no escape issues.
-
-    C) OTHER tables (products / sub_categories / etc.):
-       For any JOINed table whose COLUMNS list contains a column literally named
-       `img`, `image`, or `images`, project it using the table alias with a
-       deterministic suffix alias:
-           alias.img    AS <joined_table>_img      (e.g. sc.img  AS crop_img)
-           alias.image  AS <joined_table>_image    (e.g. bc.image AS category_image)
-
-    These rules are MANDATORY. The frontend requires these exact column aliases
-    (product_images / product_image / category_image / category_img / crop_img)
-    to render images.
-
-OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
+{category_rule_block}{image_rule_block}OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
 [{{"table_name": "primary_table", "sql": "SELECT ... FROM ... WHERE ..."}}]"""
+
+        # User message carries ALL per-query dynamic content (schema, intent,
+        # keyword hints, query) — see PREFIX-CACHE LAYOUT comment above.
+        user_content = (
+            f"TABLES:\n{compact_schema}"
+            f"{intent_note_block}{keyword_hint_block}"
+            f'\nQuestion: "{query}"\n'
+            f'Strip intent words, extract product/data keywords, '
+            f'write precise SQL with proper WHERE filters. Return JSON array only.'
+        )
 
         messages = [
             LLMMessage(role="system", content=system_prompt),
-            LLMMessage(role="user", content=(
-                f'Question: "{query}"\n'
-                f'Strip intent words, extract product/data keywords, '
-                f'write precise SQL with proper WHERE filters. Return JSON array only.'
-            )),
+            LLMMessage(role="user", content=user_content),
         ]
 
         logger.llm_call_start(2, "sql_generation",
