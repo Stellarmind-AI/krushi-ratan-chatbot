@@ -78,6 +78,13 @@ class ConfirmedIntent:
     domain:     str
 
 
+@dataclass
+class ConfirmedFlow:
+    """Pipeline flow confirmed by F1 — skip Route Agent, dispatch directly.
+    flow ∈ {"NAVIGATION", "GREETING", "GENERAL"}."""
+    flow: str
+
+
 # -----------------------------------------------------------------------------
 # Intent -> table mapping — UNCHANGED
 # -----------------------------------------------------------------------------
@@ -363,11 +370,16 @@ _F1_SYSTEM = (
     "DECISIONS\n"
     "═══════════════════════════════════════════════════════════════════\n"
     "\n"
-    "SKIP — {\"decision\":\"skip\"}\n"
-    "  • Rules 1, 2, 3 above\n"
-    "  • Generic app concepts: \"what is krushi ratn\", \"is app free\",\n"
-    "    \"app features\", \"what languages\", \"what is yard\" (concept)\n"
-    "  • Pure greetings: hello, hi, namaste, kem cho\n"
+    "SKIP — {\"decision\":\"skip\",\"flow\":\"<NAVIGATION|GREETING|GENERAL>\"}\n"
+    "  When skipping, ALSO include the downstream flow so the route agent can be\n"
+    "  bypassed. Map cleanly:\n"
+    "  • Rules 1, 2, 3 (process / sell / buy)             → flow=NAVIGATION\n"
+    "  • Pure greetings (hello, hi, namaste, kem cho)     → flow=GREETING\n"
+    "  • Generic app concepts (\"what is krushi ratn\",\n"
+    "    \"is app free\", \"app features\", \"what languages\",\n"
+    "    \"what is yard\" concept)                          → flow=GENERAL\n"
+    "  If you are unsure which flow applies, omit the flow field — emit just\n"
+    "  {\"decision\":\"skip\"} and the route agent will classify.\n"
     "\n"
     "CLEAR — {\"decision\":\"clear\",\"intent\":\"<X>\",\"keyword\":\"<subject>\"}\n"
     "  Intent values: crop_price | seed_info | equipment_kshop | equipment_used |\n"
@@ -402,7 +414,8 @@ _F1_SYSTEM = (
     "═══════════════════════════════════════════════════════════════════\n"
     "RESPONSE — JSON ONLY, NO MARKDOWN, NO EXPLANATION\n"
     "═══════════════════════════════════════════════════════════════════\n"
-    "  {\"decision\":\"skip\"}\n"
+    "  {\"decision\":\"skip\",\"flow\":\"NAVIGATION|GREETING|GENERAL\"}  (preferred)\n"
+    "  {\"decision\":\"skip\"}                                          (only if unsure)\n"
     "  {\"decision\":\"clear\",\"intent\":\"<intent>\",\"keyword\":\"<subject>\"}\n"
     "  {\"decision\":\"ambiguous\",\"scenario\":\"<scenario>\",\"keyword\":\"<subject>\"}\n"
     "\n"
@@ -448,7 +461,7 @@ class ConfirmationLayer:
 
     async def check(
         self, user_query: str
-    ) -> Optional[Union[ClarificationRequest, ConfirmedIntent]]:
+    ) -> Optional[Union[ClarificationRequest, ConfirmedIntent, ConfirmedFlow]]:
 
         q_orig = user_query.strip()
 
@@ -481,9 +494,17 @@ class ConfirmationLayer:
         decision = result.get("decision", "skip")
         keyword  = result.get("keyword", "").strip()
 
-        # SKIP — navigation, greeting, general app question
+        # SKIP — navigation, greeting, general app question.
+        # If F1 also returned a confident `flow`, surface it via ConfirmedFlow so
+        # chat_handler can bypass route_agent (Phase 5 optimization). When the
+        # flow field is missing/invalid, return None as before — route_agent
+        # falls back to its normal classification (zero-regression path).
         if decision == "skip":
-            logger.info(f"F1 SKIP — nav/general/greeting: {q_orig[:60]!r}")
+            flow = (result.get("flow") or "").strip().upper()
+            if flow in ("NAVIGATION", "GREETING", "GENERAL"):
+                logger.info(f"F1 SKIP+FLOW — flow={flow} | {q_orig[:60]!r}")
+                return ConfirmedFlow(flow=flow)
+            logger.info(f"F1 SKIP (no flow) — falling back to route agent: {q_orig[:60]!r}")
             return None
 
         # CLEAR — single unambiguous domain

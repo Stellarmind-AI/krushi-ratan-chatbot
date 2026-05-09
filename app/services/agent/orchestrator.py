@@ -198,6 +198,7 @@ class Orchestrator:
         confirmed_intent: Optional[str] = None,  # F1: set when user picked a clarification option
         keyword_hint: str = "",                  # F1: matched keyword for targeted SQL generation
         force_navigation: bool = False,          # Nav signal detected — skip route agent
+        forced_flow: Optional[str] = None,       # F1 Phase 5: explicit flow ("NAVIGATION"|"GREETING"|"GENERAL") — skip route agent
     ) -> Dict[str, Any]:
         """
         Process user query through route agent → correct flow.
@@ -266,6 +267,28 @@ class Orchestrator:
                 result["flow"] = "NAVIGATION"
                 total_ms = (time.perf_counter() - pipeline_start) * 1000
                 logger.pipeline_end("NAVIGATION", total_ms)
+                return result
+
+            # ── F1 Phase 5: forced_flow from Confirmation Layer ─────────────
+            # When F1 returned skip+flow, route agent classification is redundant.
+            # Dispatch directly to the matching flow handler. SQL is intentionally
+            # NOT a valid forced_flow value — SQL routing always goes through
+            # confirmed_intent or full route_agent classification.
+            if forced_flow in ("NAVIGATION", "GREETING", "GENERAL"):
+                logger.step(
+                    "STEP 1 / ROUTE AGENT",
+                    f"SKIPPED — F1 forced_flow='{forced_flow}' bypasses route agent",
+                )
+                logger.step_done("STEP 1 / ROUTE AGENT", 0, flow=forced_flow, reason="f1_forced_flow")
+                if forced_flow == "GREETING":
+                    result = await self._flow_greeting(user_query)
+                elif forced_flow == "GENERAL":
+                    result = await self._flow_general(user_query)
+                else:
+                    result = await self._flow_navigation(user_query)
+                result["flow"] = forced_flow
+                total_ms = (time.perf_counter() - pipeline_start) * 1000
+                logger.pipeline_end(forced_flow, total_ms)
                 return result
 
             logger.step("STEP 1 / ROUTE AGENT", "Classifying question")

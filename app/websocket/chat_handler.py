@@ -26,7 +26,7 @@ from app.services.agent.orchestrator import get_orchestrator
 from app.services.language_processor import get_language_processor
 from app.services.translation_service import translate_to_user_language, translate_list_to_user_language
 from app.services.agent.confirmation_layer import (
-    get_confirmation_layer, ConfirmedIntent,
+    get_confirmation_layer, ConfirmedIntent, ConfirmedFlow,
     NAV_INTENT_KEY, build_navigation_query,
 )
 
@@ -241,6 +241,9 @@ class ChatHandler:
         #   ClarificationRequest → confidence < 80%, pause and ask user
         #   None                 → no ambiguity, proceed normally
         _sql_enabled = settings.is_sql_enabled
+        # F1 Phase 5: forced_flow lets F1 short-circuit the route agent for
+        # NAVIGATION/GREETING/GENERAL queries. None means "let route agent decide".
+        f1_forced_flow: Optional[str] = None
         if not confirmed_intent and _sql_enabled:
             f1_result = await self.confirmation_layer.check(processed_text)
 
@@ -253,6 +256,15 @@ class ChatHandler:
                     session_id=session_id,
                 )
                 confirmed_intent = f1_result.intent_key
+
+            elif isinstance(f1_result, ConfirmedFlow):
+                # F1 also classified the flow — skip route agent entirely.
+                logger.info(
+                    "F1 FORCED FLOW",
+                    flow=f1_result.flow,
+                    session_id=session_id,
+                )
+                f1_forced_flow = f1_result.flow
 
             elif f1_result is not None:
                 # Low-confidence — pipeline paused, ask user
@@ -300,6 +312,7 @@ class ChatHandler:
                     confirmed_intent=confirmed_intent,  # F1: None on first pass; set on resume
                     keyword_hint=keyword_hint,          # F1: matched keyword for SQL targeting
                     force_navigation=force_navigation,  # Nav signal detected — skip route agent
+                    forced_flow=f1_forced_flow,         # F1 Phase 5: NAVIGATION|GREETING|GENERAL — skip route agent
                 )
                 english_answer = result.get("answer", "")
             except Exception as e:
