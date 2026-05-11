@@ -324,8 +324,41 @@ class SchemaGenerator:
             notes.append("Product names in GUJARATI SCRIPT — search both scripts: WHERE name LIKE '%keyword%' OR name LIKE '%gujarati%'")
             notes.append("STRIP intent words before search (mare=I want, karvu=to do, che=is, purchase, from, kshop) — these are NOT product keywords")
             notes.append("Search each keyword INDEPENDENTLY with OR — never full phrase LIKE")
+        if table_name == "buy_sell_products":
+            notes.append(
+                "IMAGE COLUMN — product photos are stored INSIDE the form_data JSON column under key 'Images' (a JSON array). "
+                "To return product images you MUST select: JSON_EXTRACT(bp.form_data, '$.Images') AS product_images. "
+                "The standalone `images` column is legacy and should NOT be projected."
+            )
+            notes.append("Always also include bc.image AS category_image when JOINing buy_sell_categories (category thumbnail).")
+        if table_name == "kshop_products":
+            notes.append(
+                "IMAGE COLUMN — kshop_products has NO direct image column. Product images live in the `media` table, "
+                "linked through the polymorphic `mediables` table. To return product images you MUST add: "
+                "LEFT JOIN mediables mb ON mb.mediable_id = kp.id AND mb.mediable_type LIKE 'App%KshopProduct' "
+                "LEFT JOIN media m ON m.id = mb.media_id, then SELECT CONCAT(m.filename, '.', m.extension) AS product_image. "
+                "Use LIKE 'App%KshopProduct' (NOT a backslash equality literal) — backslash escaping through JSON/MySQL is unreliable."
+            )
+            notes.append("Always also include kc.img AS category_img when JOINing kshop_categories (category thumbnail).")
         if table_name == "products":
-            notes.append("Crop price table — JOIN yards→cities to filter by location, ORDER BY price_date DESC for latest")
+            notes.append("Crop price table — JOIN yards→cities AND yards→talukas to filter by location, ORDER BY price_date DESC for latest")
+            notes.append(
+                "LOCATION FILTER RULE: A user-supplied location name may be a city, a taluka, or a yard name. "
+                "ALWAYS match against ALL THREE name columns with OR — cities.name, talukas.name, AND yards.name — "
+                "in BOTH English and Gujarati script. Example: '%Mahuva%' OR '%મહુવા%' OR '%mahuva%' against c.name AND t.name AND y.name. "
+                "NEVER filter only on cities.name — talukas like મહુવા are not cities and would be missed."
+            )
+            notes.append(
+                "LOCATION FK CHAIN: products.yard_id → yards (has city_id, taluka_id, state_id). "
+                "To filter by taluka, JOIN talukas via y.taluka_id. To filter by city, JOIN cities via y.city_id. "
+                "Both joins should be LEFT JOIN (some yards may have nullable city_id/taluka_id)."
+            )
+            notes.append(
+                "MULTI-TALUKA RULE: When the user names a CITY (e.g. Bhavnagar), include all yards in that city — "
+                "which means all yards across all talukas under that city_id. Do NOT additionally filter by "
+                "taluka.name = city.name; just match c.name (and let the FK chain include every yard with that "
+                "city_id automatically)."
+            )
 
         return {
             "tool_name":      f"query_{table_name}",
@@ -346,37 +379,65 @@ class SchemaGenerator:
     def _build_example_queries(self, table_name: str, safe_columns: Optional[List[str]] = None) -> List[str]:
         examples = {
             "kshop_products": [
-                "SELECT kp.id, kp.name, kp.price, kp.discount_price, kco.name AS company, kc.name AS category, kc.img AS category_img "
+                # IMAGE: kshop_products has no direct image column — resolve via
+                # mediables (polymorphic, mediable_type LIKE 'App%KshopProduct')
+                # → media (filename + extension). LIKE pattern avoids the
+                # backslash-escape fragility of equality with 'App\\Models\\X'.
+                "SELECT kp.id, kp.name, kp.price, kp.discount_price, kco.name AS company, kc.name AS category, kc.img AS category_img, "
+                "CONCAT(m.filename, '.', m.extension) AS product_image "
                 "FROM kshop_products kp "
                 "JOIN kshop_companies kco ON kp.kshop_company_id = kco.id "
                 "LEFT JOIN kshop_categories kc ON kp.kshop_category_id = kc.id AND kc.deleted_at IS NULL "
                 "LEFT JOIN kshop_weights kw ON kp.kshop_weight_id = kw.id "
+                "LEFT JOIN mediables mb ON mb.mediable_id = kp.id AND mb.mediable_type LIKE 'App%KshopProduct' "
+                "LEFT JOIN media m ON m.id = mb.media_id "
                 "WHERE kp.deleted_at IS NULL AND kp.status = 1 "
-                "AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE name LIKE '%weeder%' OR name LIKE '%વીડર%' AND deleted_at IS NULL) "
+                "AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE (name LIKE '%weeder%' OR name LIKE '%વીડર%') AND deleted_at IS NULL) "
                 "ORDER BY kp.updated_at DESC LIMIT 50",
             ],
             "buy_sell_products": [
                 # NOTE: No status = 'active' filter here — per SQL generation Rule #12,
                 # status filtering is handled by the post-retrieval status_filter layer.
                 # Adding it in SQL would silently exclude 'sold_out' and other valid states.
-                "SELECT bp.id, bp.product_name, bp.price, bp.quantity_available, bp.images, bc.name AS category, bc.image AS category_image "
+                # IMAGE: product photos live INSIDE form_data JSON column under key 'Images'.
+                # The standalone `images` column is legacy — do not project it.
+                "SELECT bp.id, bp.product_name, bp.price, bp.quantity_available, "
+                "JSON_EXTRACT(bp.form_data, '$.Images') AS product_images, "
+                "bc.name AS category, bc.image AS category_image "
                 "FROM buy_sell_products bp "
                 "LEFT JOIN buy_sell_categories bc ON bp.category_id = bc.id AND bc.deleted_at IS NULL "
                 "WHERE bp.deleted_at IS NULL "
-                "AND bp.category_id IN (SELECT id FROM buy_sell_categories WHERE name LIKE '%tractor%' OR name LIKE '%ટ્રેક્ટર%' AND deleted_at IS NULL) "
+                "AND bp.category_id IN (SELECT id FROM buy_sell_categories WHERE (name LIKE '%tractor%' OR name LIKE '%ટ્રેક્ટર%') AND deleted_at IS NULL) "
                 "ORDER BY bp.created_at DESC LIMIT 50",
             ],
             "products": [
-                "SELECT sc.name AS crop, sc.img AS crop_img, p.min_price, p.max_price, p.price_date, y.name AS yard, c.name AS city "
+                # Crop + city — must JOIN talukas too AND match against city/taluka/yard
+                # name columns with OR. Krushi Ratn yards live in talukas; a yard whose
+                # taluka equals the user-typed city would otherwise be missed.
+                "SELECT sc.name AS crop, sc.img AS crop_img, p.min_price, p.max_price, p.price_date, y.name AS yard, c.name AS city, t.name AS taluka "
                 "FROM products p "
                 "JOIN sub_categories sc ON p.subcategory_id = sc.id "
                 "JOIN yards y ON p.yard_id = y.id "
-                "JOIN cities c ON y.city_id = c.id "
+                "LEFT JOIN cities c ON y.city_id = c.id "
+                "LEFT JOIN talukas t ON y.taluka_id = t.id "
                 "LEFT JOIN weights w ON p.weight_id = w.id "
                 "WHERE p.deleted_at IS NULL "
                 "AND (sc.name LIKE '%kapas%' OR sc.name LIKE '%કપાસ%' OR p.subcategory_name LIKE '%kapas%') "
-                "AND (c.name LIKE '%Bhavnagar%' OR c.name LIKE '%ભાવનગર%') "
-                "ORDER BY p.price_date DESC LIMIT 20",
+                "AND (c.name LIKE '%Bhavnagar%' OR c.name LIKE '%ભાવનગર%' OR t.name LIKE '%Bhavnagar%' OR t.name LIKE '%ભાવનગર%' OR y.name LIKE '%Bhavnagar%' OR y.name LIKE '%ભાવનગર%') "
+                "ORDER BY p.price_date DESC LIMIT 50",
+                # Crop + taluka (e.g. onion in મહુવા) — taluka name must be matched on
+                # talukas.name through yards.taluka_id; matching only cities.name would
+                # silently miss every yard whose city.name differs from the taluka name.
+                "SELECT sc.name AS crop, sc.img AS crop_img, p.min_price, p.max_price, p.price_date, y.name AS yard, c.name AS city, t.name AS taluka "
+                "FROM products p "
+                "JOIN sub_categories sc ON p.subcategory_id = sc.id "
+                "JOIN yards y ON p.yard_id = y.id "
+                "LEFT JOIN cities c ON y.city_id = c.id "
+                "LEFT JOIN talukas t ON y.taluka_id = t.id "
+                "WHERE p.deleted_at IS NULL "
+                "AND (sc.name LIKE '%onion%' OR sc.name LIKE '%ડુંગળી%' OR sc.name LIKE '%dungli%' OR p.subcategory_name LIKE '%onion%') "
+                "AND (t.name LIKE '%Mahuva%' OR t.name LIKE '%મહુવા%' OR c.name LIKE '%Mahuva%' OR c.name LIKE '%મહુવા%' OR y.name LIKE '%Mahuva%' OR y.name LIKE '%મહુવા%') "
+                "ORDER BY p.price_date DESC LIMIT 50",
             ],
         }
         if table_name in examples:

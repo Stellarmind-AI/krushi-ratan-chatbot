@@ -11,6 +11,7 @@ from app.services.database.query_validator import query_validator
 from app.models.chat_models import QueryResult
 from app.core.logger import get_database_logger
 from app.utils.privacy_policy import get_privacy_policy
+from app.utils.image_url_resolver import resolve_images_in_rows
 
 logger = get_database_logger()
 
@@ -79,6 +80,17 @@ class QueryExecutor:
             # answer generation, or API responses can see them.
             raw_rows = list(results) if results else []
             rows = get_privacy_policy().sanitize_rows(raw_rows)
+
+            # Rewrite image-name fields into full S3 URLs.  Single transform
+            # site so the LLM context, status filter, cache replay, and
+            # frontend WebSocket payload all see URLs — never raw filenames.
+            #
+            # We pass `clean_sql` so the resolver can parse it and determine
+            # each column's REAL source table (not the LLM-chosen alias).
+            # Without this, an alias like `subcategory_img` (LLM's choice)
+            # cannot be mapped to the `sub_categories` folder because the
+            # alias prefix `subcategory` is not the real table name.
+            rows = resolve_images_in_rows(rows, sql=clean_sql)
 
             # Log only safe metadata, never raw DB payload values.
             try:

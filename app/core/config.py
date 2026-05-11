@@ -109,6 +109,17 @@ class Settings(BaseSettings):
         default="app/schemas/privacy_policy.json",
         description="Privacy policy used to sanitize schema tools and SQL access",
     )
+
+    # ================================
+    # IMAGE / S3 CONFIGURATION
+    # ================================
+    # Base URL for S3-hosted images. The DB stores only filenames; the
+    # image URL resolver appends a per-field folder + the filename. Override
+    # via .env for staging/production buckets.
+    IMAGE_BASE_URL: str = Field(
+        default="https://krushiratn-image-production.s3.ap-south-1.amazonaws.com",
+        description="S3 base URL for image hosting (no trailing slash, no folder)",
+    )
     
     @validator("LOG_LEVEL")
     def validate_log_level(cls, v):

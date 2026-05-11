@@ -26,7 +26,7 @@ from app.services.agent.orchestrator import get_orchestrator
 from app.services.language_processor import get_language_processor
 from app.services.translation_service import translate_to_user_language, translate_list_to_user_language
 from app.services.agent.confirmation_layer import (
-    get_confirmation_layer, ConfirmedIntent,
+    get_confirmation_layer, ConfirmedIntent, ConfirmedFlow,
     NAV_INTENT_KEY, build_navigation_query,
 )
 
@@ -241,6 +241,9 @@ class ChatHandler:
         #   ClarificationRequest → confidence < 80%, pause and ask user
         #   None                 → no ambiguity, proceed normally
         _sql_enabled = settings.is_sql_enabled
+        # F1 Phase 5: forced_flow lets F1 short-circuit the route agent for
+        # NAVIGATION/GREETING/GENERAL queries. None means "let route agent decide".
+        f1_forced_flow: Optional[str] = None
         if not confirmed_intent and _sql_enabled:
             f1_result = await self.confirmation_layer.check(processed_text)
 
@@ -253,6 +256,15 @@ class ChatHandler:
                     session_id=session_id,
                 )
                 confirmed_intent = f1_result.intent_key
+
+            elif isinstance(f1_result, ConfirmedFlow):
+                # F1 also classified the flow — skip route agent entirely.
+                logger.info(
+                    "F1 FORCED FLOW",
+                    flow=f1_result.flow,
+                    session_id=session_id,
+                )
+                f1_forced_flow = f1_result.flow
 
             elif f1_result is not None:
                 # Low-confidence — pipeline paused, ask user
@@ -300,6 +312,7 @@ class ChatHandler:
                     confirmed_intent=confirmed_intent,  # F1: None on first pass; set on resume
                     keyword_hint=keyword_hint,          # F1: matched keyword for SQL targeting
                     force_navigation=force_navigation,  # Nav signal detected — skip route agent
+                    forced_flow=f1_forced_flow,         # F1 Phase 5: NAVIGATION|GREETING|GENERAL — skip route agent
                 )
                 english_answer = result.get("answer", "")
             except Exception as e:
@@ -319,8 +332,18 @@ class ChatHandler:
         history.messages.append(ChatMessage(role="assistant", content=final_answer))
         history.updated_at = datetime.now()
 
-        query_data          = self._build_query_data(result, key="query_results")
-        query_data_filtered = self._build_query_data(result, key="query_results_filtered")
+        # Frontend contract: a single `query_data` field carrying the
+        # post-status-filter rows (what the LLM saw and what's safe to
+        # render).  When the status-filter step didn't run — non-SQL
+        # flows (NAVIGATION/GENERAL/GREETING) and SQL fast-paths
+        # (no-data / not-found / sql-disabled) — `query_results_filtered`
+        # is absent from the orchestrator result; we fall back to the raw
+        # `query_results` so `query_data` is always the canonical view.
+        # `query_data_filtered` was the old dual-shipping field — removed
+        # so the wire format stays single-shape across all flows.
+        query_data = self._build_query_data(result, key="query_results_filtered")
+        if not query_data:
+            query_data = self._build_query_data(result, key="query_results")
 
         try:
             text_msg = {
@@ -333,7 +356,6 @@ class ChatHandler:
                 "cache_hit":           result.get("cache_hit", False),
                 "timestamp":           datetime.now().isoformat(),
                 "query_data":          _safe_serialize(query_data),
-                "query_data_filtered": _safe_serialize(query_data_filtered),
             }
             await ws.send_text(json.dumps(text_msg, ensure_ascii=False))
         except Exception as e:
@@ -349,13 +371,17 @@ class ChatHandler:
                     cached=result.get("cache_hit", False))
 
     @staticmethod
-    def _build_query_data(result: dict, key: str = "query_results") -> dict:
+    def _build_query_data(result: dict, key: str = "query_results_filtered") -> dict:
         """
-        Build a structured dict of raw DB rows keyed by table name.
+        Build a structured dict of DB rows keyed by table name.
 
         key  — which result list to read from the orchestrator result dict:
-                "query_results"          -> raw rows (all statuses)
-                "query_results_filtered" -> rows after status filter (what LLM saw)
+                "query_results_filtered" (default) -> rows after status filter
+                                                       (what LLM saw — canonical
+                                                       view shipped to frontend)
+                "query_results"                    -> raw rows (all statuses);
+                                                       used as fallback for flows
+                                                       that don't run the filter
 
         Returns {} for NAVIGATION / GENERAL / GREETING flows (no DB query runs).
         """
