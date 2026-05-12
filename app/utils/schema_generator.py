@@ -377,6 +377,31 @@ class SchemaGenerator:
         }
 
     def _build_example_queries(self, table_name: str, safe_columns: Optional[List[str]] = None) -> List[str]:
+        # Standard count-pattern templates per "entity table". Each template tells
+        # the SQL generator (and the tool selector) that this table is the canonical
+        # home for counting that entity. COUNT(*) is used because each row in
+        # these tables is one unique entity (PK guarantees uniqueness).
+        _COUNT_EXAMPLES: Dict[str, str] = {
+            "kshop_products":      "SELECT COUNT(*) AS count FROM kshop_products kp WHERE kp.deleted_at IS NULL AND kp.status = 1",
+            "buy_sell_products":   "SELECT COUNT(*) AS count FROM buy_sell_products bp WHERE bp.deleted_at IS NULL",
+            "buy_sell_categories": "SELECT COUNT(*) AS count FROM buy_sell_categories bc WHERE bc.deleted_at IS NULL",
+            "kshop_categories":    "SELECT COUNT(*) AS count FROM kshop_categories kc WHERE kc.deleted_at IS NULL",
+            "kshop_companies":     "SELECT COUNT(*) AS count FROM kshop_companies kco WHERE kco.deleted_at IS NULL",
+            "categories":          "SELECT COUNT(*) AS count FROM categories c WHERE c.deleted_at IS NULL",
+            "sub_categories":      "SELECT COUNT(*) AS count FROM sub_categories sc WHERE sc.deleted_at IS NULL",
+            "products":            "SELECT COUNT(*) AS count FROM products p WHERE p.deleted_at IS NULL",
+            "seeds":               "SELECT COUNT(*) AS count FROM seeds s WHERE s.deleted_at IS NULL",
+            "yards":               "SELECT COUNT(*) AS count FROM yards y WHERE y.deleted_at IS NULL",
+            # Geography: count with optional location filter — show the three-way OR
+            # pattern so the LLM can apply it when the user filters by location.
+            "talukas":             "SELECT COUNT(*) AS count FROM talukas t LEFT JOIN cities c ON t.city_id = c.id WHERE t.deleted_at IS NULL AND (c.name LIKE '%Bhavnagar%' OR c.name LIKE '%ભાવનગર%')",
+            "cities":              "SELECT COUNT(*) AS count FROM cities c LEFT JOIN states s ON c.state_id = s.id WHERE c.deleted_at IS NULL",
+            "states":              "SELECT COUNT(*) AS count FROM states s WHERE s.deleted_at IS NULL",
+            "news":                "SELECT COUNT(*) AS count FROM news n WHERE n.deleted_at IS NULL",
+            "video_posts":         "SELECT COUNT(*) AS count FROM video_posts vp WHERE vp.deleted_at IS NULL",
+            "video_categories":    "SELECT COUNT(*) AS count FROM video_categories vc WHERE vc.deleted_at IS NULL",
+        }
+
         examples = {
             "kshop_products": [
                 # IMAGE: kshop_products has no direct image column — resolve via
@@ -394,6 +419,8 @@ class SchemaGenerator:
                 "WHERE kp.deleted_at IS NULL AND kp.status = 1 "
                 "AND kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE (name LIKE '%weeder%' OR name LIKE '%વીડર%') AND deleted_at IS NULL) "
                 "ORDER BY kp.updated_at DESC LIMIT 50",
+                # COUNT: "how many products in kshop" — use the entity table directly.
+                _COUNT_EXAMPLES["kshop_products"],
             ],
             "buy_sell_products": [
                 # NOTE: No status = 'active' filter here — per SQL generation Rule #12,
@@ -409,6 +436,8 @@ class SchemaGenerator:
                 "WHERE bp.deleted_at IS NULL "
                 "AND bp.category_id IN (SELECT id FROM buy_sell_categories WHERE (name LIKE '%tractor%' OR name LIKE '%ટ્રેક્ટર%') AND deleted_at IS NULL) "
                 "ORDER BY bp.created_at DESC LIMIT 50",
+                # COUNT: "how many listings in buy/sell" — use the entity table directly.
+                _COUNT_EXAMPLES["buy_sell_products"],
             ],
             "products": [
                 # Crop + city — must JOIN talukas too AND match against city/taluka/yard
@@ -438,15 +467,36 @@ class SchemaGenerator:
                 "AND (sc.name LIKE '%onion%' OR sc.name LIKE '%ડુંગળી%' OR sc.name LIKE '%dungli%' OR p.subcategory_name LIKE '%onion%') "
                 "AND (t.name LIKE '%Mahuva%' OR t.name LIKE '%મહુવા%' OR c.name LIKE '%Mahuva%' OR c.name LIKE '%મહુવા%' OR y.name LIKE '%Mahuva%' OR y.name LIKE '%મહુવા%') "
                 "ORDER BY p.price_date DESC LIMIT 50",
+                # COUNT: "how many price records exist" — entity = product, table = products.
+                _COUNT_EXAMPLES["products"],
+                # COUNT(DISTINCT): "how many different crops have price data" — entity (crop)
+                # lives in sub_categories, but uniqueness is across the products transactional
+                # table, so COUNT(DISTINCT subcategory_id) is the right pattern.
+                "SELECT COUNT(DISTINCT p.subcategory_id) AS count FROM products p WHERE p.deleted_at IS NULL",
             ],
         }
         if table_name in examples:
             return examples[table_name]
+
+        # Tables without an explicit rich example get a minimal data-fetch example
+        # PLUS the count-pattern example (when applicable). The count example
+        # ensures the tool selector sees this table as relevant for count
+        # questions about its entity, and the SQL generator has a matching
+        # template to reference.
+        result: List[str] = []
         safe_columns = safe_columns or ["id"]
         select_cols = ", ".join(safe_columns[:6])
         if table_name in SOFT_DELETE_TABLES:
-            return [f"SELECT {select_cols} FROM {table_name} WHERE deleted_at IS NULL LIMIT 10"]
-        return [f"SELECT {select_cols} FROM {table_name} WHERE 1=1 LIMIT 10"]
+            result.append(f"SELECT {select_cols} FROM {table_name} WHERE deleted_at IS NULL LIMIT 10")
+        else:
+            result.append(f"SELECT {select_cols} FROM {table_name} WHERE 1=1 LIMIT 10")
+        # Append count example if curated; otherwise generate a generic one for
+        # soft-delete tables so "how many <entity>" queries always have a template.
+        if table_name in _COUNT_EXAMPLES:
+            result.append(_COUNT_EXAMPLES[table_name])
+        elif table_name in SOFT_DELETE_TABLES:
+            result.append(f"SELECT COUNT(*) AS count FROM {table_name} WHERE deleted_at IS NULL")
+        return result
 
     def save_condensed_schema(self, condensed_schema: Dict[str, Any]):
         with open(self.condensed_schema_path, 'w', encoding='utf-8') as f:

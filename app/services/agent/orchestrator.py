@@ -829,12 +829,89 @@ RULES:
       CORRECT:   SELECT n.id, n.title FROM news n JOIN states s ...
       Aggregates (COUNT(*), SUM(col)) may be unqualified if column is unique.
 
-1. ENUMERATION — if user asks for the LIST/SET of items the app tracks (NOT a specific item):
-   "list all X", "show all X", "what X are available", "બધા X બતાવો", "kayi X uplabdh che".
-   Use SELECT DISTINCT on the descriptive name column with NO LIKE filter on the category word.
-   Pattern: SELECT DISTINCT <name_col> AS <alias> FROM <table> [JOINs] WHERE deleted_at IS NULL ORDER BY <name_col> ASC LIMIT 100.
-   Example: "list all crops" → SELECT DISTINCT sc.name AS crop FROM products p JOIN sub_categories sc ON p.subcategory_id = sc.id WHERE p.deleted_at IS NULL ORDER BY sc.name LIMIT 100.
-   Overrides rules 3 and 4 for enumeration only — applies when user did NOT name a specific item.
+1. AGGREGATE / LIST QUERIES — CHECK INTENT FIRST:
+   The user is asking either for a NUMBER (count) or for the LIST itself. Pick the right SQL shape:
+
+   a) COUNT / QUANTITY question — user wants a NUMBER (must use aggregate, NOT a list):
+      Triggers (any language): "how many", "how much" (no price word), "count of",
+      "total of", "number of", "total number", "ketla", "ketli", "ketlu", "ketle",
+      "kul ketla", "ganatari", "sankhya", "kitne", "kitni", "kitna", "kul kitne",
+      "કેટલા", "કેટલી", "કેટલું", "કુલ", "ગણતરી", "સંખ્યા",
+      "कितने", "कितनी", "कितना", "कुल", "संख्या" — and any natural farmer
+      phrasing including mixed/broken grammar.
+
+      STEP 1 — IDENTIFY THE ENTITY:
+        Before writing SQL, identify the THING the user is counting. The entity is
+        usually the LAST noun of the count phrase, NOT every noun in the query.
+        Examples (entity in bold):
+          "how many product **categories** in buy/sell"     → entity = category
+          "how many **products** in kshop"                  → entity = product
+          "how many **talukas** in bhavnagar"               → entity = taluka
+          "how many **companies** in kshop"                 → entity = company
+          "how many **crops** are tracked"                  → entity = crop
+          "how many **cities** does the app cover"          → entity = city
+          "how many **videos** in app"                      → entity = video
+
+      STEP 2 — PICK THE TABLE WHOSE ROWS *ARE* THAT ENTITY:
+        Each table is the canonical home of ONE entity. Use the table whose rows
+        directly represent the entity — NOT a transactional table that mentions
+        the entity via a foreign key.
+          category   → buy_sell_categories  / kshop_categories  / categories  / sub_categories
+                       (pick the one matching the section — buy/sell vs kshop vs general)
+          product    → buy_sell_products    / kshop_products
+          taluka     → talukas               city → cities       state → states
+          company    → kshop_companies       yard → yards
+          crop       → sub_categories        seed → seeds        news → news
+          video      → video_posts           video_category → video_categories
+        ⚠️ COMMON MISTAKE — DO NOT pick the transactional table just because the
+        query contains its keyword. "how many product categories" must use
+        buy_sell_categories or kshop_categories (entity = category), NOT
+        buy_sell_products / kshop_products. "how many companies" must use
+        kshop_companies, NOT kshop_products.
+
+      STEP 3 — WRITE COUNT SQL:
+        Default pattern (one row = one entity):
+          SELECT COUNT(*) AS count FROM <entity_table> [JOINs] WHERE <entity_table>.deleted_at IS NULL [AND <filter>]
+        Use COUNT(DISTINCT fk_col) ONLY when the user's count must come from a
+        TRANSACTIONAL table that has many rows per entity:
+          "how many DIFFERENT crops have price data" — the entity (crop) lives
+          in sub_categories, but the user is asking about presence in products:
+            SELECT COUNT(DISTINCT p.subcategory_id) AS count FROM products p WHERE p.deleted_at IS NULL
+          "how many companies have listings in kshop":
+            SELECT COUNT(DISTINCT kp.kshop_company_id) AS count FROM kshop_products kp WHERE kp.deleted_at IS NULL AND kp.status = 1
+        When entity word "DIFFERENT" / "UNIQUE" / "જુદા" appears in the question,
+        prefer COUNT(DISTINCT col). Otherwise prefer COUNT(*) on the entity table.
+
+      All other rules still apply: kshop_products still adds `AND status = 1`; location
+      queries still use the three-way OR (cities/talukas/yards); soft-delete still applied;
+      keyword variants from KEYWORD SEARCH VARIANTS still injected.
+      Examples:
+        "how many products in kshop" (entity=product, table=kshop_products)
+          → SELECT COUNT(*) AS count FROM kshop_products kp WHERE kp.deleted_at IS NULL AND kp.status = 1
+        "how many talukas in bhavnagar" (entity=taluka, table=talukas)
+          → SELECT COUNT(*) AS count FROM talukas t LEFT JOIN cities c ON t.city_id = c.id WHERE t.deleted_at IS NULL AND (c.name LIKE '%Bhavnagar%' OR c.name LIKE '%ભાવનગર%')
+        "ketla product category avillabel che buy sell ma" (entity=category, table=buy_sell_categories — NOT buy_sell_products)
+          → SELECT COUNT(*) AS count FROM buy_sell_categories bc WHERE bc.deleted_at IS NULL
+        "how many companies sell in kshop" (entity=company, table=kshop_companies — NOT kshop_products)
+          → SELECT COUNT(*) AS count FROM kshop_companies kc WHERE kc.deleted_at IS NULL
+        "kitne different crops" (entity=crop with "different" → DISTINCT, table=products via subcategory_id)
+          → SELECT COUNT(DISTINCT p.subcategory_id) AS count FROM products p WHERE p.deleted_at IS NULL
+        "kitne videos in app" (entity=video, table=video_posts)
+          → SELECT COUNT(*) AS count FROM video_posts vp WHERE vp.deleted_at IS NULL
+
+   b) LIST / ENUMERATION question — user wants the SET of items themselves:
+      Triggers: "list all X", "show all X", "what X are available", "બધા X બતાવો",
+      "kayi X uplabdh che", "give me all X", "enumerate X".
+      Use SELECT DISTINCT on the descriptive name column with NO LIKE filter on category word:
+        SELECT DISTINCT <name_col> AS <alias> FROM <table> [JOINs]
+        WHERE deleted_at IS NULL ORDER BY <name_col> ASC LIMIT 100
+      Example: "list all crops"
+          → SELECT DISTINCT sc.name AS crop FROM products p JOIN sub_categories sc ON p.subcategory_id = sc.id WHERE p.deleted_at IS NULL ORDER BY sc.name LIMIT 100
+
+   c) Both 1a and 1b OVERRIDE rules 3 and 4 (keyword search) — those apply ONLY when the
+      user names a SPECIFIC item (e.g. "kapas bhav", "balwan weeder price"). When the user
+      asks "how many" or "list all", do NOT add LIKE keyword filters on the category word
+      itself (don't write LIKE '%product%' or LIKE '%crop%').
 
 2. Strip intent words from query before extracting keywords:
    mare, maro, karvu, karu, che, purchase, from, levu, joiye, apo, batao, please.
