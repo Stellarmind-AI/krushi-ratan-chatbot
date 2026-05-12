@@ -56,6 +56,20 @@ SQL
     list of yards, list of cities, list of K-Shop products, list of news
     (any "show / list / enumerate / give me all" intent that wants the
     actual live set, not a static description)
+  - COUNT / QUANTITY / AMOUNT questions about ANY database entity — the
+    user is asking for a NUMBER that must be computed from live data.
+    Triggers (any language, any phrasing):
+      English:    how many, how much (without price word), count of,
+                  number of, total of, total number, give me count of,
+                  tell me count of, total <X>
+      Romanized:  ketla, ketli, ketlu, ketle, kul ketla, ganatari,
+                  sankhya, kitne, kitni, kitna, kul kitne
+      Gujarati:   કેટલા, કેટલી, કેટલું, કુલ, ગણતરી, સંખ્યા
+      Hindi:      कितने, कितनी, कितना, कुल, संख्या
+    Apply to ANY entity (products, talukas, cities, yards, users, orders,
+    videos, news, crops, animals, etc.) and ANY natural phrasing —
+    including broken/mixed grammar like "how much products kshop have"
+    or "bhavnagar ma ketli talukas che".
 
 NAVIGATION
   User wants HOW TO USE the app — step-by-step instructions:
@@ -201,6 +215,16 @@ Examples:
   "show me all crops" → SQL
   "show list of crops present in krushiratn" → SQL
   "crops in krushi ratn" → SQL
+  "how many products in kshop" → SQL
+  "how many talukas in bhavnagar" → SQL
+  "how many cities in gujarat" → SQL
+  "count of crops available" → SQL
+  "total number of yards" → SQL
+  "give me total cows in buy sell" → SQL
+  "bhavnagar ma ketli talukas che" → SQL
+  "kitne videos uploaded last month" → SQL
+  "ગોંડલ માં કેટલા યાર્ડ છે" → SQL
+  "કુલ કેટલા ગાય છે" → SQL
   "app ma weight unit shu che" → GENERAL
   "buyer aavya par shu karvu" → GENERAL
   "kharidi karta pahela shu jovu" → GENERAL

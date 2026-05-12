@@ -399,9 +399,25 @@ class SQLSanitizer:
         json_suffix = _json_artifact_re.search(sql)
         if json_suffix:
             sql = sql[:json_suffix.start()].strip()
-        # Strip any stray trailing quote / brace / bracket / whitespace
-        _junk_chars = '"' + "'" + '\n\r }])'
-        sql = sql.rstrip(_junk_chars).strip()
+        # Strip any stray trailing JSON-artifact junk while keeping SQL valid.
+        # Plain `rstrip` was greedy and stripped the closing quote of literals
+        # like `LIKE '%ભાવનગર%')` (because the `%` blocks stripping but the
+        # next char inward is the legitimate closing quote — rstrip removed
+        # `)` then `'`, leaving an unclosed string literal).
+        # Balance-aware loop: never strip a quote that would unbalance the
+        # string literals; never strip a `)` that would unbalance parentheses.
+        _junk_chars = set('"\'\n\r\t }])')
+        while sql and sql[-1] in _junk_chars:
+            ch = sql[-1]
+            candidate = sql[:-1]
+            if ch == "'" and candidate.count("'") % 2 != 0:
+                break  # stripping would leave an unclosed single-quoted literal
+            if ch == '"' and candidate.count('"') % 2 != 0:
+                break  # stripping would leave an unclosed double-quoted literal
+            if ch == ")" and candidate.count("(") > candidate.count(")"):
+                break  # stripping would leave an unmatched open paren
+            sql = candidate
+        sql = sql.strip()
         
         # Fix missing table prefixes in SELECT when JOINs present
         sql = SQLSanitizer._fix_missing_table_prefixes(sql)

@@ -121,7 +121,7 @@ FORBIDDEN PHRASES — NEVER USE THESE
 ✗ "Here are the details:"
 ✗ "I found X products"
 ✗ Any mention of table names, SQL, database, rows, columns
-✗ Any count like "21 water pumps found" at the start of the answer
+✗ Search-result jargon like "21 water pumps found" or "Found X results" (natural counts like "Krushi Ratn currently lists [N]" ARE allowed and required when TOTAL ROWS > items shown)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 HOW TO WRITE THE ANSWER
@@ -131,9 +131,8 @@ RULE 1 — PRODUCT LISTS (K-Shop products, multiple results):
 Start with a short intro sentence, then list ONLY name + price. No specs, no descriptions.
 
 Intro examples (pick based on query):
-  "The following water pumps are available in Krushi Ratn:"
-  "Here are the tractors available on Krushi Ratn:"
-  "These sprayers are currently listed in Krushi Ratn:"
+  When TOTAL ROWS > items shown: "Krushi Ratn currently lists [N] [things]. Here are some:"
+  Otherwise:                      "Here are the tractors available on Krushi Ratn:" / "The following water pumps are available in Krushi Ratn:"
 
 Then list items in this exact format (one per line):
   1. [Product Name] — ₹[price] (Discount: ₹[discount_price])
@@ -162,8 +161,12 @@ Say it naturally based on what was asked:
   - Prices under a limit: "No products are currently priced under ₹[X]. The lowest-priced options start at ₹[Y]." (only if data exists)
 
 RULE 5 — COUNT QUERIES (e.g. "how many products?"):
+Each result block starts with "TOTAL ROWS: N" — this is the authoritative count.
+For count questions:
+  - If the result row contains a `count` field (e.g. "Row 1: count: 42"), use that value.
+  - Otherwise use the TOTAL ROWS value.
 One short sentence: "Krushi Ratn currently lists [N] [things]."
-Never "There are N rows found."
+Never "There are N rows found." Never repeat the literal "TOTAL ROWS" label.
 
 RULE 6 — NO UNREQUESTED EXTRAS:
 - Do NOT add tips, suggestions, or "Would you like more details?"
@@ -219,8 +222,13 @@ Please provide a natural, helpful answer to the user's question based on these r
     def _format_query_results(self, query_results: List[QueryResult]) -> str:
         """
         Format query results for the prompt.
-        Does NOT include table names or row counts — those leak into
-        the LLM's answer as "Found X rows in Y table" which is user-facing noise.
+        Includes TOTAL ROWS per result set so the LLM has the authoritative count
+        for count/quantity questions ("how many X") without recounting rows
+        itself. The system prompt's FORBIDDEN PHRASES list prevents the LLM
+        from leaking this as "Found X rows" noise; Rule 5 specifies the correct
+        count phrasing ("Krushi Ratn currently lists [N] [things]").
+        Does NOT include table names — those leak more easily as
+        "Found X rows in Y table".
         """
 
         if not query_results:
@@ -230,11 +238,18 @@ Please provide a natural, helpful answer to the user's question based on these r
 
         for result in query_results:
             if result.row_count == 0:
+                formatted_parts.append("TOTAL ROWS: 0")
                 formatted_parts.append("(empty result set)")
                 continue
 
-            # Format rows (limit to first 20 sent to LLM — the prompt caps display at 10)
-            rows = result.rows[:20]
+            # Authoritative count — use for count questions or list summaries.
+            formatted_parts.append(f"TOTAL ROWS: {result.row_count}")
+
+            # Send only as many rows as the LLM will display (Rule 1: at most 10).
+            # SQL already sorts (ORDER BY updated_at/price_date), so the first 10
+            # are already the best 10 — no need to over-fetch a "buffer for choice".
+            # TOTAL ROWS above still tells the LLM there are more.
+            rows = result.rows[:10]
 
             for i, row in enumerate(rows, 1):
                 row_items = []
@@ -248,8 +263,8 @@ Please provide a natural, helpful answer to the user's question based on these r
 
                 formatted_parts.append(f"Row {i}: {', '.join(row_items)}")
 
-            if result.row_count > 20:
-                formatted_parts.append(f"(plus {result.row_count - 20} more rows not shown)")
+            if result.row_count > 10:
+                formatted_parts.append(f"(plus {result.row_count - 10} more rows not shown)")
 
         return '\n'.join(formatted_parts)
 
