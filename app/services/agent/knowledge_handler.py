@@ -338,6 +338,10 @@ class KnowledgeHandler:
             "RULES:\n"
             "1. Output ONLY the exact steps from the matching screen. Do NOT mix steps across\n"
             "   screens. Do NOT add intros, tips, or closings ('Let me know...').\n"
+            "1a. If the screen's content says the feature is NOT AVAILABLE or CANNOT BE DONE,\n"
+            "    output ONLY that information — do NOT invent steps or workarounds.\n"
+            "    Example: If 'how_to_use' says 'you cannot change mobile number', respond with\n"
+            "    ONLY that text — do NOT add steps like 'go to Profile' or 'contact support'.\n"
             "2. For general/overview questions, use the FEATURES list — do not invent features.\n"
             "3. If the user asks about a feature that DOES NOT EXIST, respond EXACTLY:\n"
             "   'This feature is not available in the Krushi Ratn app. "
@@ -456,7 +460,11 @@ class KnowledgeHandler:
         parts = []
         for entry in entries:
             lines = [f"SCREEN: {entry.get('screen', '')}"]
-
+            if entry.get("tags"):
+                tags = entry["tags"]
+                if isinstance(tags, list) and tags:
+                    tag_str = ", ".join(tags[:8])  # Show first 8 tags
+                    lines.append(f"Keywords: {tag_str}")
             if entry.get("description"):
                 lines.append(f"Description: {entry['description']}")
             if entry.get("how_to_reach"):
