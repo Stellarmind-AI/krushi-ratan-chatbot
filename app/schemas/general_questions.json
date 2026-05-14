@@ -10,7 +10,14 @@
         "what is",
         "about",
         "shu che",
-        "app vishe"
+        "app vishe",
+        "कृषि रत्न क्या है",
+        "एप क्या है",
+        "क्रुषि रत्न क्या है",
+        "कृषि रत्न के बारे में",
+        "एप के बारे में",
+        "krushi ratn kya hai",
+        "app kya hai"
       ],
       "question": "What is Krushi Ratn?",
       "answer": "Krushi Ratn is a free digital agricultural marketplace app designed for farmers in Gujarat. It provides: (1) Mandi Bhav — real-time crop market prices from yards across Gujarat; (2) K-Shop — buy agricultural equipment, seeds, fertilizers from verified companies; (3) Buy/Sell Marketplace — trade animals, equipment, and produce directly with other farmers; (4) Farming Videos — educational content from agricultural experts; (5) Agricultural News — latest news, government schemes, and weather alerts; (6) AI Chatbot — ask any farming or app-related question in Gujarati or English."
@@ -23,7 +30,16 @@
         "signup",
         "new user",
         "join",
-        "register kevi rite"
+        "register kevi rite",
+        "रजिस्टर कैसे करें",
+        "रजिस्टर नहीं हो रहा",
+        "अकाउंट कैसे बनाएं",
+        "नया अकाउंट",
+        "साइन अप",
+        "नया उपयोगकर्ता",
+        "register nahi ho raha",
+        "account kaise banaye",
+        "naya account"
       ],
       "question": "How do I register or create an account?",
       "answer": "To register: Open the app → tap 'Register' → enter your mobile number → receive an OTP on SMS → enter the OTP → fill in your name, village, district, and state → tap 'Create Account'. Registration is free and takes less than 2 minutes. No email address is needed — only your mobile number."
@@ -35,7 +51,24 @@
         "sign in",
         "forgot password",
         "otp",
-        "login problem"
+        "login problem",
+        "ओटीपी नहीं मिला",
+        "ओटीपी नहीं आया",
+        "मुझे ओटीपी नहीं मिला",
+        "ओटीपी क्या है",
+        "ओटीपी कैसे काम करता है",
+        "लॉगिन नहीं हो रहा",
+        "लॉगिन क्या है",
+        "लॉगिन कैसे करें",
+        "पासवर्ड भूल गया",
+        "पासवर्ड रीसेट",
+        "अकाउंट नहीं बन रहा",
+        "साइन इन",
+        "otp nahi mila",
+        "otp nahi aaya",
+        "login nahi ho raha",
+        "password bhul gaya",
+        "account nahi bana"
       ],
       "question": "How do I log in to the app?",
       "answer": "Login uses OTP (no password needed). Open app → tap 'Login' → enter your registered mobile number → tap 'Send OTP' → enter the 6-digit OTP received by SMS → tap 'Verify'. You are now logged in. If you did not receive OTP, tap 'Resend OTP' after 60 seconds."
@@ -175,7 +208,16 @@
         "subscription",
         "charge",
         "paise",
-        "muft"
+        "muft",
+        "एप फ्री है",
+        "एप फ्री है क्या",
+        "कोई चार्ज है",
+        "मुफ्त है",
+        "पैसे लगते हैं",
+        "सब्सक्रिप्शन",
+        "app free hai",
+        "paisa lagta hai",
+        "muft hai"
       ],
       "question": "Is Krushi Ratn free to use?",
       "answer": "Yes, Krushi Ratn is completely free to download and use. Registration is free. Browsing products, checking mandi bhav, watching videos, reading news, and posting Buy/Sell listings are all free. You only pay when you buy a product from K-Shop (you pay the product price + delivery). There is no subscription fee."
@@ -413,7 +455,11 @@
         "યાર્ડ",
         "માર્કેટ યાર્ડ",
         "મંડી",
-        "APMC"
+        "यार्ड क्या है",
+        "मंडी क्या है",
+        "यार्ड का मतलब",
+        "yard kya hai",
+        "mandi kya hai"
       ],
       "question": "What is a yard in Krushi Ratn?",
       "answer": "A Yard is an official government-regulated marketplace where farmers bring their harvested crops to sell at a public auction. In Krushi Ratn, the Mandi Bhav section shows real-time crop prices from yards across Gujarat. Each yard reports the minimum price, maximum price, and modal price for each crop on a daily basis. Yards are organized by city and taluka. Examples of yards in Gujarat include Rajkot Yard, Gondal Yard, Unjha Yard, Bhavnagar Yard, and 100+ others. To see prices from a specific yard: open Mandi Bhav → select district → select yard → select crop."
@@ -777,9 +823,15 @@
         "એપ ઇશ્યૂ",
         "app samssya",
         "app na prablem",
-        "problem aavyo",
-        "issue aavyo",
-        "shu karvanu"
+        "एप काम नहीं कर रहा",
+        "एप में समस्या",
+        "एप की समस्या",
+        "तकनीकी समस्या",
+        "एप एरर",
+        "एप क्रैश",
+        "app kaam nahi karta",
+        "app mein samasya",
+        "technical samasya"
       ],
       "question": "What should I do if I face issues using the app?",
       "answer": "If you face any issue while using the Krushi Ratn app, you can contact support through the app itself. Go to Profile → Help & Support, where you will find contact details such as email and phone numbers to resolve your issue."
@@ -956,7 +1008,7 @@
         "વેચનાર સંપર્ક",
         "ખરીદનાર સંપર્ક",
         "કોલ સેલર",
-        "વોટ્સએપ સેલર",  
+        "વોટ્સએપ સેલર",
         "સેલર નો નંબર"
       ],
       "question": "How is communication between buyer and seller?",
