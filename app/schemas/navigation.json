@@ -22,7 +22,6 @@
         "kshop category",
         "kshop show details",
         "yes buy",
-        "confirm order kshop",
         "kshop purchase kevi rite",
         "કે-શોપ",
         "કેશોપ",
@@ -35,7 +34,7 @@
       ],
       "screen": "K-Shop — Buy Product",
       "description": "How to purchase a product from K-Shop",
-      "how_to_use": "Step 1: Go to K-Shop section.\nStep 2: Select your required category.\nStep 3: Tap on 'Show Details' on the required product.\nStep 4: Tap on 'Buy Now'.\nStep 5: Click on 'Yes, Buy' to confirm your order.",
+      "how_to_use": "Step 1: Go to K-Shop section.\nStep 2: Select your required category.\nStep 3: Tap on 'Show Details' on the required product.\nStep 4: Tap on 'Buy Now'.\nStep 5: Click on 'Yes, Buy' to place your order.\nNote: Order confirmation is done by the Krushi Ratn team — not by the user. To check your order status, go to My Orders → Krushi Store.",
       "not_for": "Do NOT use this flow for buying crops (pak/pako/agricultural produce) from farmers. K-Shop is ONLY for tools, seeds, fertilizers, and agricultural supplies."
     },
     {
@@ -82,6 +81,18 @@
         "mara orders",
         "order history",
         "kshop order joi",
+        "confirm order", 
+        "order confirm", 
+        "order confirmation", 
+        "order confirmed", 
+        "order status", 
+        "kshop order confirm",
+        "team confirm order", 
+        "order confirm thai gayo", 
+        "confirm thai gayo", 
+        "ઓર્ડર કન્ફર્મ", 
+        "ઓર્ડર સ્ટેટસ", 
+        "ઓર્ડર થઈ ગયો",
         "મારો ઓર્ડર જોવો",
         "ઓર્ડર જોવો",
         "ઓર્ડર ચેક",
@@ -94,8 +105,8 @@
         "ઓર્ડર ક્યાં સુધી પહોંચ્યો"
       ],
       "screen": "K-Shop — View My Orders",
-      "description": "How to view placed K-Shop orders",
-      "how_to_use": "Step 1: Go to Home Screen.\nStep 2: Click on 'My Orders'.\nStep 3: Click on 'Krushi Store'.\nStep 4: Click on the order you want to see."
+      "description": "How to view placed K-Shop orders and check order status. Order confirmation is handled by the Krushi Ratn team — users can track their order progress here.",
+      "how_to_use": "Step 1: Go to Home Screen.\nStep 2: Click on 'My Orders'.\nStep 3: Click on 'Krushi Store'.\nStep 4: Click on the order you want to see.\nNote: Order confirmation is done by the Krushi Ratn team. You will see your order status updated here once confirmed."
     },
     {
       "id": "nav_crop_sell",
