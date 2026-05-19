@@ -829,6 +829,31 @@ RULES:
       CORRECT:   SELECT n.id, n.title FROM news n JOIN states s ...
       Aggregates (COUNT(*), SUM(col)) may be unqualified if column is unique.
 
+0.5. HINDI SCRIPT DETECTION (CRITICAL — DATABASE HAS GUJARATI ONLY):
+   ⚠️ MANDATORY CHECK: Is the query in Hindi (Devanagari) script?
+   
+   DETECTION: Hindi characters = क ख ग घ च छ ज झ ट ठ ड ढ त थ द ध न प फ ब भ म य र ल व श ष स ह
+   
+   IF HINDI DETECTED → TRANSLATE TO GUJARATI BEFORE WRITING SQL:
+   
+   Common translations (USE THESE EXACTLY):
+   कपास→કપાસ  गेहूं→ઘઉં  प्याज→ડુંગળી  आलू→બટાટા  टमाटर→ટામેટા
+   भावनगर→ભાવનગર  राजकोट→રાજકોટ  सूरत→સુરત  अहमदाबाद→અમદાવાદ
+   आज→આજ  कीमत→કિંમત  भाव→ભાવ  में→માં  का→નો
+   
+   EXAMPLE — Query: "आज भावनगर में कपास का क्या भाव है?"
+   
+   ❌ WRONG SQL (Hindi script → 0 rows):
+   WHERE sc.name LIKE '%कपास%' AND c.name LIKE '%भावनगर%'
+   
+   ✅ CORRECT SQL (Gujarati script → finds data):
+   WHERE (sc.name LIKE '%કપાસ%' OR sc.name LIKE '%kapas%')
+   AND (c.name LIKE '%ભાવનગર%' OR c.name LIKE '%Bhavnagar%')
+   
+   DATABASE FACT: All crop/city names stored as કપાસ, ભાવનગર (Gujarati),
+   NOT कपास, भावनगर (Hindi). Hindi script in LIKE = guaranteed 0 rows.
+
+
 1. AGGREGATE / LIST QUERIES — CHECK INTENT FIRST:
    The user is asking either for a NUMBER (count) or for the LIST itself. Pick the right SQL shape:
 
@@ -928,6 +953,11 @@ RULES:
           onion = ડુંગળી (NOT કાંદા/प्याज)   tomato = ટામેટા (NOT ટમાટર/टमाटर)
           potato = બટાકા (NOT આલુ/आलू)       garlic = લસણ (NOT લહસુન/लहसुन)
           rice = ચોખા / ડાંગર (NOT ચાવલ/चावल)
+      • HINDI SCRIPT QUERIES (Devanagari) — If user query contains Hindi script (कपास, भावनगर, etc.),
+        TRANSLATE to Gujarati script equivalents before using in SQL. Common translations:
+          कपास→કપાસ, भावनगर→ભાવનગર, राजकोट→રાજકોટ, गेहूं→ઘઉં, प्याज→ડુંગળી,
+          आलू→બટાકા, टमाटर→ટામેટા, लहसुन→લસણ, आज→આજ, कीमत→કિંમત, भाव→ભાવ
+        Database has Gujarati script ONLY. Hindi script in LIKE clauses will return 0 rows.
       • Equipment terms — phonetic transliteration to Gujarati script:
           motor→મોટર, tractor→ટ્રેક્ટર, pump→પંપ, sprayer→સ્પ્રેયર,
           thresher→થ્રેસર, harvester→હાર્વેસ્ટર, weeder→વીડર, seeder→સીડર.
