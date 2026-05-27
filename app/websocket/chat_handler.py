@@ -253,9 +253,17 @@ class ChatHandler:
                     "F1 HIGH CONFIDENCE",
                     intent=f1_result.intent_key,
                     confidence=f"{f1_result.confidence:.0%}",
+                    keyword=f1_result.keyword,
                     session_id=session_id,
                 )
                 confirmed_intent = f1_result.intent_key
+                # Carry the F1-extracted keyword forward so the orchestrator's
+                # entity normalizer can resolve it to canonical Gujarati and the
+                # SQL prompt can inject the CANONICAL / TRANSLATE KEYWORD block.
+                # Without this assignment keyword_hint stays at its default ""
+                # and the entire normalization path short-circuits.
+                if f1_result.keyword:
+                    keyword_hint = f1_result.keyword
 
             elif isinstance(f1_result, ConfirmedFlow):
                 # F1 also classified the flow — skip route agent entirely.

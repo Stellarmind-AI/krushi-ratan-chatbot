@@ -55,10 +55,18 @@ class ClarificationRequest:
 
 @dataclass
 class ConfirmedIntent:
-    """Single clear intent detected — skip F1 UI, inject intent directly."""
+    """Single clear intent detected — skip F1 UI, inject intent directly.
+
+    `keyword` carries the subject extracted by F1 (e.g. "काले तिल", "kapas",
+    "ગાય"). chat_handler reads it into `keyword_hint` so the orchestrator's
+    entity normalizer can resolve it to a canonical Gujarati value before
+    SQL generation. Without this field the keyword is lost between F1 and
+    the orchestrator and the SQL LLM has no anchor for the LIKE clause.
+    """
     intent_key: str
     confidence: float
     domain:     str
+    keyword:    str = ""
 
 
 @dataclass
@@ -432,6 +440,7 @@ class ConfirmationLayer:
                 intent_key=intent,
                 confidence=0.92,
                 domain=intent,
+                keyword=keyword,
             )
 
         # AMBIGUOUS — show clarification buttons
