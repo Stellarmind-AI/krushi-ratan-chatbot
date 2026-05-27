@@ -29,6 +29,7 @@ from app.services.agent.knowledge_handler import get_knowledge_handler
 from app.services.agent.status_filter     import filter_query_results
 from app.services.database.query_executor import get_query_executor
 from app.services.database.query_validator import query_validator
+from app.services.entity_normalizer       import get_entity_normalizer
 from app.utils.schema_generator        import SchemaGenerator
 from app.utils.privacy_policy          import get_privacy_policy
 from app.services.llm.manager          import get_llm_manager
@@ -37,43 +38,6 @@ from app.core.logger                   import get_agent_logger, Timer
 from app.core.config                   import settings
 
 logger = get_agent_logger()
-
-
-# ── Keyword variant map (built once, used by SQL generation) ──────────────────
-# Maps a keyword (EN, Romanized, or Gujarati) → all search variants.
-# Used when F1 Confirmation Layer provides a keyword_hint.
-_KV_BASE: Dict[str, list] = {
-    "kapas":      ["kapas", "cotton", "કપાસ"],
-    "wheat":      ["wheat", "ghau", "gahu", "ઘઉં", "ઘઉ"],
-    "bajra":      ["bajra", "bajri", "bajro", "બાજરો", "બાજરી"],
-    "magfali":    ["magfali", "groundnut", "moongfali", "મગફળી"],
-    "onion":      ["onion", "dungli", "kanda", "ડુંગળી"],
-    "tomato":     ["tomato", "tameta", "ટામેટા", "ટામેટું"],
-    "potato":     ["potato", "bataka", "bateta", "બટાકા", "બટેટા"],
-    "garlic":     ["garlic", "lasan", "લસણ"],
-    "chana":      ["chana", "ghana", "channa", "ચણા"],
-    "mung":       ["mung", "moong", "મગ"],
-    "jowar":      ["jowar", "jwari", "jwar", "જુવાર"],
-    "corn":       ["corn", "maize", "makai", "મકાઈ"],
-    "soybean":    ["soybean", "soya", "સોયાબીન"],
-    "tal":        ["tal", "sesame", "તલ"],
-    "chaval":     ["chaval", "rice", "ચોખા", "ડાંગર"],
-    "sugarcane":  ["sugarcane", "sherdio", "શેરડી"],
-    "tractor":    ["tractor", "ટ્રેક્ટર"],
-    "pump":       ["pump", "motor pump", "water pump", "પંપ", "મોટર પંપ"],
-    "thresher":   ["thresher", "thresar", "thraser", "થ્રેસર", "થ્રેશર"],
-    "thresar":    ["thresher", "thresar", "thraser", "થ્રેસર", "થ્રેશર"],
-    "sprayer":    ["sprayer", "duster", "સ્પ્રેયર", "ફ્વારો"],
-    "weeder":     ["weeder", "power weeder", "વીડર"],
-    "seeder":     ["seeder", "planter", "સીડર"],
-}
-# Expand: Gujarati script keys point to the same variant lists
-KEYWORD_VARIANTS: Dict[str, list] = {}
-for _en_key, _var_list in _KV_BASE.items():
-    KEYWORD_VARIANTS[_en_key] = _var_list
-    for _v in _var_list:
-        if _v not in KEYWORD_VARIANTS:
-            KEYWORD_VARIANTS[_v] = _var_list
 
 
 class Orchestrator:
@@ -95,6 +59,10 @@ class Orchestrator:
         self.query_executor    = get_query_executor()
         self.llm_manager       = get_llm_manager()
         self.privacy_policy    = get_privacy_policy()
+        # Eagerly load the entity catalog at server startup so the "📚
+        # EntityNormalizer loaded" log appears on boot — and so the first
+        # query doesn't pay the JSON-load latency.
+        self.entity_normalizer = get_entity_normalizer()
 
         # Schema data
         self.condensed_schema: dict = {}
@@ -439,6 +407,25 @@ class Orchestrator:
                     f"falling through to normal tool selection"
                 )
 
+        # ── Entity normalization (intent + keyword → canonical Gujarati) ────
+        # Runs BEFORE SQL generation so the prompt can inject the exact
+        # Gujarati value the DB stores, eliminating LLM hallucination of
+        # English/Hindi/Romanized LIKE variants.
+        gujarati_keyword: str = ""
+        if confirmed_intent and keyword_hint:
+            resolved = self.entity_normalizer.normalize(confirmed_intent, keyword_hint)
+            if resolved:
+                gujarati_keyword = resolved
+                logger.info(
+                    f"🔤 normalize({confirmed_intent}, {keyword_hint!r}) → "
+                    f"canonical={gujarati_keyword!r}"
+                )
+            else:
+                logger.info(
+                    f"🔤 normalize({confirmed_intent}, {keyword_hint!r}) → no match — "
+                    f"SQL prompt will translate to Gujarati"
+                )
+
         # ── STEP 2: Cache check ─────────────────────────────────────────────
         logger.step("STEP 2 / CACHE CHECK", query[:60])
         cached = self.query_cache.get(query)
@@ -553,6 +540,7 @@ class Orchestrator:
                     query, selected_tools,
                     keyword_hint=keyword_hint,
                     intent_note=intent_note,
+                    gujarati_keyword=gujarati_keyword,
                 )
             logger.step_done("STEP 5 / SQL GENERATION", t.elapsed_ms,
                              queries_count=len(queries))
@@ -658,7 +646,14 @@ class Orchestrator:
 
     # ── SQL helpers ─────────────────────────────────────────────────────────────
 
-    async def _generate_sql_compact(self, query: str, selected_tools: List[str], keyword_hint: str = "", intent_note: str = "") -> List[Dict]:
+    async def _generate_sql_compact(
+        self,
+        query: str,
+        selected_tools: List[str],
+        keyword_hint: str = "",
+        intent_note: str = "",
+        gujarati_keyword: str = "",
+    ) -> List[Dict]:
         """Generate SQL using pre-compiled compact schemas. ~60% fewer tokens than full schema."""
         available = set(self.privacy_policy.filter_tool_names(self.schema_generator.get_available_tool_names()))
         selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
@@ -700,64 +695,51 @@ class Orchestrator:
         if example_lines:
             compact_schema += "\n" + "\n".join(example_lines) + "\n"
 
-        # Build keyword hint block.
+        # Build Gujarati-only keyword block.
         #
-        # Two paths:
-        #   (1) F1 keyword_hint set  → use that one keyword's variants (F1 already
-        #       resolved the ambiguity, we trust it).
-        #   (2) F1 keyword_hint not set → AUTO-DETECT every keyword in the query
-        #       against the KEYWORD_VARIANTS map and inject ALL their variants.
+        # The DB stores names in GUJARATI script exclusively. The entity
+        # normalizer (called in _flow_sql) resolves the user's keyword to
+        # its canonical Gujarati value when one exists in the catalog.
         #
-        # Why (2) exists:
-        # Without an authoritative variant list, the LLM fills in Gujarati
-        # translations from its own training and picks the wrong language —
-        # e.g. Hindi 'કાંદા' for onion when the DB stores Gujarati 'ડુંગળી'.
-        # Auto-detection closes that guessing surface whenever the query names
-        # a keyword we've curated variants for.
-        # Only inject a KEYWORD SEARCH VARIANTS section when we have an
-        # AUTHORITATIVE curated variant list (from _KV_BASE). Otherwise leave
-        # it out so the LLM falls through to rule 4(b) and generates Gujarati
-        # script translation itself.
+        # Three cases:
+        #   (A) gujarati_keyword set     → catalog hit — inject the exact value;
+        #                                  the LLM uses it verbatim, no variants.
+        #   (B) keyword_hint set, no hit → ask the LLM to translate the user's
+        #                                  keyword to Gujarati script and use
+        #                                  ONLY the Gujarati form.
+        #   (C) neither set              → no F1 keyword; rule 4 of the system
+        #                                  prompt instructs the LLM to extract
+        #                                  the keyword and translate to Gujarati.
         #
-        # Why this matters: previously we injected `[keyword_hint]` even when
-        # the keyword wasn't in _KV_BASE — that single-element section combined
-        # with rule 4(a) ("use ONLY listed variants") trapped the LLM into
-        # English-only LIKE clauses, missing all Gujarati DB rows.
-        # See: user-reported "i want use motor" / "i want motore" failures.
-        hint_pairs: List[tuple] = []
-        if keyword_hint:
-            variants = (KEYWORD_VARIANTS.get(keyword_hint.lower())
-                        or KEYWORD_VARIANTS.get(keyword_hint))
-            if variants:
-                hint_pairs.append((keyword_hint, list(variants)))
-            # else: no curated variants → skip section, rule 4(b) handles translation
-        else:
-            hint_pairs = self._detect_keywords_in_query(query)
-
+        # All three paths converge on the same outcome: every LIKE clause in
+        # the generated SQL contains Gujarati script only — no English,
+        # Romanized, or Hindi forms.
         keyword_hint_block = ""
-        if hint_pairs:
-            source = "user clarification" if keyword_hint else "auto-detected from query"
-            lines = [
-                "",
-                f"KEYWORD SEARCH VARIANTS ({source}) — USE EXACTLY THESE, DO NOT INVENT OTHERS:",
-            ]
-            for matched, variants in hint_pairs:
-                variants_sql = " OR ".join(f"<column> LIKE '%{v}%'" for v in variants)
-                lines.append(f"  '{matched}' → {variants}")
-                lines.append(f"    SQL form: {variants_sql}")
-            lines.append(
-                "  Rules: apply these LIKE variants as follows:\n"
-                "    • For buy_sell_products: filter via category subquery — "
-                "bp.category_id IN (SELECT id FROM buy_sell_categories WHERE name LIKE '%variant%' OR ... AND deleted_at IS NULL)\n"
-                "    • For kshop_products: filter via category subquery — "
-                "kp.kshop_category_id IN (SELECT id FROM kshop_categories WHERE name LIKE '%variant%' OR ... AND deleted_at IS NULL)\n"
-                "    • For all other tables (news, video_posts, etc.): apply LIKE to the relevant name/title column directly."
+        if gujarati_keyword:
+            keyword_hint_block = (
+                "\nCANONICAL GUJARATI KEYWORD (resolved from the catalog — use verbatim):\n"
+                f"  '{gujarati_keyword}'\n"
+                "  Rules:\n"
+                "    • Use this EXACT Gujarati value in every LIKE clause for the keyword.\n"
+                "    • Do NOT add English, Romanized, Hindi, or alternate Gujarati variants.\n"
+                "    • Apply via the category subquery for buy_sell_products / kshop_products\n"
+                "      (per rule 12); for all other tables apply LIKE to the relevant\n"
+                "      name/title column directly.\n"
+                f"    • Form: <column> LIKE '%{gujarati_keyword}%'\n"
             )
-            lines.append(
-                "  Do NOT translate keywords into Hindi, Marathi, or any other script — "
-                "use ONLY the variants listed above."
+        elif keyword_hint:
+            keyword_hint_block = (
+                "\nTRANSLATE KEYWORD (the catalog had no entry for this keyword):\n"
+                f"  User keyword: '{keyword_hint}'\n"
+                "  Rules:\n"
+                "    • Translate the keyword to GUJARATI SCRIPT and use ONLY that\n"
+                "      single Gujarati form inside the LIKE clause.\n"
+                "    • Do NOT include the English, Romanized, or Hindi form.\n"
+                "    • Apply via the category subquery for buy_sell_products / kshop_products\n"
+                "      (per rule 12); for all other tables apply LIKE to the relevant\n"
+                "      name/title column directly.\n"
+                "    • Form: <column> LIKE '%<gujarati>%'\n"
             )
-            keyword_hint_block = "\n".join(lines) + "\n"
 
         # Build intent note block — tells SQL generator exactly what domain to query
         intent_note_block = ""
@@ -775,18 +757,21 @@ class Orchestrator:
                 parts.append(
                     "  • buy_sell_products: NEVER filter on bp.product_name (user-entered, unreliable). Use:\n"
                     "      bp.category_id IN (SELECT id FROM buy_sell_categories\n"
-                    "                          WHERE (name LIKE '%kw%' OR name LIKE '%gujarati%') AND deleted_at IS NULL)"
+                    "                          WHERE name LIKE '%<gujarati>%' AND deleted_at IS NULL)"
                 )
             if _has_kshop:
                 parts.append(
                     "  • kshop_products: NEVER filter on kp.name (user-entered, unreliable). Use:\n"
                     "      kp.kshop_category_id IN (SELECT id FROM kshop_categories\n"
-                    "                                WHERE (name LIKE '%kw%' OR name LIKE '%gujarati%') AND deleted_at IS NULL)"
+                    "                                WHERE name LIKE '%<gujarati>%' AND deleted_at IS NULL)"
                 )
             category_rule_block = (
                 "12. CATEGORY-BASED FILTERING (ABSOLUTE — no exceptions):\n"
                 + "\n".join(parts) + "\n"
-                "    Apply ALL keyword variants from KEYWORD SEARCH VARIANTS inside the subquery WHERE.\n"
+                "    The <gujarati> placeholder is the single Gujarati value from rule 4\n"
+                "    (CANONICAL GUJARATI KEYWORD if provided, otherwise the translated\n"
+                "    Gujarati form). Use ONE LIKE clause per subquery — no English/\n"
+                "    Romanized/Hindi alternatives.\n"
             )
 
         image_rule_block = ""
@@ -884,12 +869,12 @@ RULES:
 
       All other rules still apply: kshop_products still adds `AND status = 1`; location
       queries still use the three-way OR (cities/talukas/yards); soft-delete still applied;
-      keyword variants from KEYWORD SEARCH VARIANTS still injected.
+      the single Gujarati keyword from rule 4 is still applied inside any LIKE clause.
       Examples:
         "how many products in kshop" (entity=product, table=kshop_products)
           → SELECT COUNT(*) AS count FROM kshop_products kp WHERE kp.deleted_at IS NULL AND kp.status = 1
         "how many talukas in bhavnagar" (entity=taluka, table=talukas)
-          → SELECT COUNT(*) AS count FROM talukas t LEFT JOIN cities c ON t.city_id = c.id WHERE t.deleted_at IS NULL AND (c.name LIKE '%Bhavnagar%' OR c.name LIKE '%ભાવનગર%')
+          → SELECT COUNT(*) AS count FROM talukas t LEFT JOIN cities c ON t.city_id = c.id WHERE t.deleted_at IS NULL AND c.name LIKE '%ભાવનગર%'
         "ketla product category avillabel che buy sell ma" (entity=category, table=buy_sell_categories — NOT buy_sell_products)
           → SELECT COUNT(*) AS count FROM buy_sell_categories bc WHERE bc.deleted_at IS NULL
         "how many companies sell in kshop" (entity=company, table=kshop_companies — NOT kshop_products)
@@ -918,21 +903,39 @@ RULES:
 
 3. Search each keyword INDEPENDENTLY with OR — never full-phrase LIKE.
 
-4. MULTILINGUAL KEYWORD SEARCH (CRITICAL — DB stores Gujarati script PRIMARILY):
-   a) If a "KEYWORD SEARCH VARIANTS" section is present above, use ONLY those variants.
-      Do NOT invent extras (e.g. don't add 'કાંદા' if 'ડુંગળી' is the listed onion variant).
-   b) If no variants section, generate Gujarati yourself:
-      • Always include the user's original form, the Gujarati script equivalent, and
-        the Romanized form if user typed Gujarati script.
-      • CRITICAL — DB stores GUJARATI words, NOT Hindi. Use Gujarati where they differ:
-          onion = ડુંગળી (NOT કાંદા/प्याज)   tomato = ટામેટા (NOT ટમાટર/टमाटर)
-          potato = બટાકા (NOT આલુ/आलू)       garlic = લસણ (NOT લહસુન/लहसुन)
-          rice = ચોખા / ડાંગર (NOT ચાવલ/चावल)
-      • Equipment terms — phonetic transliteration to Gujarati script:
-          motor→મોટર, tractor→ટ્રેક્ટર, pump→પંપ, sprayer→સ્પ્રેયર,
-          thresher→થ્રેસર, harvester→હાર્વેસ્ટર, weeder→વીડર, seeder→સીડર.
-        For unknown words, transliterate phonetically.
-      • Form: name LIKE '%motor%' OR name LIKE '%મોટર%'.
+4. KEYWORD SEARCH — GUJARATI SCRIPT ONLY (the DB stores Gujarati exclusively):
+   The user message will contain ONE of these directives (or neither):
+   a) "CANONICAL GUJARATI KEYWORD: '<value>'" — use that exact Gujarati value
+      verbatim inside the LIKE clause. Do NOT add English, Romanized, Hindi,
+      or alternate Gujarati variants. Form: <column> LIKE '%<value>%'.
+   b) "TRANSLATE KEYWORD: '<keyword>'" — translate the keyword to Gujarati
+      script and use ONLY that single Gujarati form in the LIKE clause.
+      Do NOT include the English, Romanized, or Hindi form.
+   c) If neither directive is present, extract the keyword from the question,
+      translate it to Gujarati script, and use ONLY the Gujarati form.
+
+   Translation rules — when you must translate (paths b and c):
+     • Input may be in English, Romanized Gujarati, Hindi (Devanagari script),
+       or Romanized Hindi. In every case, output a SINGLE Gujarati-script form.
+     • Worked examples — translate the LEFT form to the RIGHT form before
+       emitting the LIKE clause:
+         "काले तिल"  (Hindi script)        → કાળા તલ
+         "kale til"  (Romanized Hindi)     → કાળા તલ
+         "black sesame" (English)          → કાળા તલ
+         "तिल" / "til" / "sesame"          → તલ
+         "कपास" / "kapas" / "cotton"       → કપાસ
+         "गेहूं" / "ghau" / "wheat"        → ઘઉં
+         "प्याज" / "kanda" / "onion"       → ડુંગળી   (NOT કાંદા)
+         "टमाटर" / "tomato"               → ટામેટા
+         "मूंगफली" / "moongfali" / "groundnut" → મગફળી
+         "राजकोट" / "rajkot"              → રાજકોટ
+         "भावनगर" / "bhavnagar"           → ભાવનગર
+     • NEVER leave Devanagari (Hindi) script or Latin (English/Romanized)
+       characters inside the LIKE clause. A LIKE clause that contains anything
+       other than Gujarati-script characters between the % marks is WRONG.
+
+   In every case: a LIKE clause for a keyword must contain ONE Gujarati form
+   and nothing else. The DB has no English/Romanized/Hindi rows to match.
 
 5. JOINS — for every primary table, copy its JOINS block verbatim (JOIN vs LEFT JOIN
    exactly as shown). In SELECT, return joined tables' descriptive columns (yards.name,
@@ -950,11 +953,13 @@ RULES:
 
 9. LOCATION NAMES — a location may be yard, taluka, OR city name (often shared).
    When filtering by location, ALWAYS LEFT JOIN cities AND talukas via yards, then
-   search all three name columns with OR, in BOTH English and Gujarati script:
+   search all three name columns with OR, using GUJARATI SCRIPT ONLY:
      LEFT JOIN cities c ON y.city_id = c.id
      LEFT JOIN talukas t ON y.taluka_id = t.id
-     WHERE (y.name LIKE '%X%' OR c.name LIKE '%X%' OR t.name LIKE '%X%'
-            OR y.name LIKE '%ગુ%' OR c.name LIKE '%ગુ%' OR t.name LIKE '%ગુ%')
+     WHERE (y.name LIKE '%<gujarati>%' OR c.name LIKE '%<gujarati>%' OR t.name LIKE '%<gujarati>%')
+   The location keyword must be in Gujarati script — use the canonical value from
+   rule 4(a) if provided, otherwise translate the location name to Gujarati per
+   rule 4(b)/4(c). Do NOT add the English/Romanized form to the LIKE clauses.
    Never use `=` for location names. Never filter on only one of yards/cities/talukas.
 
 {category_rule_block}{image_rule_block}OUTPUT FORMAT: Return ONLY a valid JSON array, no explanation:
@@ -1047,59 +1052,6 @@ RULES:
         if isinstance(parsed, list):
             return [x for x in parsed if x in available]
         return []
-
-    # ── Keyword auto-detection (for SQL-generation prompt) ────────────────────
-
-    @staticmethod
-    def _detect_keywords_in_query(query: str) -> List[tuple]:
-        """
-        Scan the user's query for any token matching the curated KEYWORD_VARIANTS
-        map and return [(matched_form, variants), ...] — deduped by variant set.
-
-        Why this exists:
-          When F1 does NOT provide a keyword_hint, the SQL-generation prompt has
-          no authoritative cross-language mapping to anchor the LLM.  The LLM
-          then invents Gujarati/Hindi equivalents from its own training, and
-          frequently picks the wrong language (e.g. Hindi 'કાંદા' for onion
-          instead of Gujarati 'ડુંગળી' which is what the DB stores).
-
-          This function pulls the real variants from the same KEYWORD_VARIANTS
-          map that the F1 path uses, so both paths share one source of truth.
-
-        Matching:
-          - Single tokens: 'onion', 'ડુંગળી', 'kanda', 'dungli'
-          - Bigrams:       'motor pump', 'power weeder'
-          - Case-insensitive for English/romanized; exact-script for Gujarati
-            (KEYWORD_VARIANTS is already indexed under all three forms).
-
-        Deduplication:
-          If the query says 'onion ડુંગળી', both tokens map to the same variant
-          list — we return only one entry to keep the prompt compact.
-        """
-        if not query:
-            return []
-        # Tokenize — keep English/Gujarati/Devanagari ranges
-        tokens = re.findall(
-            r"[\w઀-૿ऀ-ॿ]+",
-            query.lower(),
-        )
-        # Build candidate list: unigrams + bigrams
-        candidates: List[str] = list(tokens)
-        for i in range(len(tokens) - 1):
-            candidates.append(f"{tokens[i]} {tokens[i+1]}")
-
-        matched: List[tuple] = []
-        seen: set = set()
-        for cand in candidates:
-            variants = KEYWORD_VARIANTS.get(cand)
-            if variants is None:
-                continue
-            key = tuple(variants)
-            if key in seen:
-                continue
-            seen.add(key)
-            matched.append((cand, list(variants)))
-        return matched
 
     # ── Exploratory query helpers ──────────────────────────────────────────────
 

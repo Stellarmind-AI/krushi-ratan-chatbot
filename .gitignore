@@ -247,3 +247,6 @@ app/schemas/full_schema.json
 # config/production.py
 # secrets/
 app/cache/query_cache.json
+
+# keyword dictionary 
+data/
