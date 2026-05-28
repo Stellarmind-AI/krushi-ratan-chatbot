@@ -248,5 +248,6 @@ app/schemas/full_schema.json
 # secrets/
 app/cache/query_cache.json
 
-# keyword dictionary 
+# keyword dictionary - ignore auto-generated catalog, keep manual overrides
 data/
+!data/entity_catalog_manual.json

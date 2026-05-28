@@ -166,7 +166,6 @@ class Orchestrator:
         confirmed_intent: Optional[str] = None,  # F1: set when user picked a clarification option
         keyword_hint: str = "",                  # F1: matched keyword for targeted SQL generation
         force_navigation: bool = False,          # Nav signal detected — skip route agent
-        forced_flow: Optional[str] = None,       # F1 Phase 5: explicit flow ("NAVIGATION"|"GREETING"|"GENERAL") — skip route agent
     ) -> Dict[str, Any]:
         """
         Process user query through route agent → correct flow.
@@ -237,28 +236,10 @@ class Orchestrator:
                 logger.pipeline_end("NAVIGATION", total_ms)
                 return result
 
-            # ── F1 Phase 5: forced_flow from Confirmation Layer ─────────────
-            # When F1 returned skip+flow, route agent classification is redundant.
-            # Dispatch directly to the matching flow handler. SQL is intentionally
-            # NOT a valid forced_flow value — SQL routing always goes through
-            # confirmed_intent or full route_agent classification.
-            if forced_flow in ("NAVIGATION", "GREETING", "GENERAL"):
-                logger.step(
-                    "STEP 1 / ROUTE AGENT",
-                    f"SKIPPED — F1 forced_flow='{forced_flow}' bypasses route agent",
-                )
-                logger.step_done("STEP 1 / ROUTE AGENT", 0, flow=forced_flow, reason="f1_forced_flow")
-                if forced_flow == "GREETING":
-                    result = await self._flow_greeting(user_query)
-                elif forced_flow == "GENERAL":
-                    result = await self._flow_general(user_query)
-                else:
-                    result = await self._flow_navigation(user_query)
-                result["flow"] = forced_flow
-                total_ms = (time.perf_counter() - pipeline_start) * 1000
-                logger.pipeline_end(forced_flow, total_ms)
-                return result
-
+            # ── Route Agent ALWAYS runs (single source of flow decisions) ────
+            # F1 only does entity extraction; flow classification is exclusively
+            # the route agent's job. This guarantees one decision point and
+            # eliminates the bypass bug.
             logger.step("STEP 1 / ROUTE AGENT", "Classifying question")
             with Timer() as t:
                 flow: FlowType = await self.route_agent.classify(user_query)
@@ -804,6 +785,138 @@ class Orchestrator:
         # hit on the system prefix and discount it after the first call.
         system_prompt = f"""You are a MySQL query generator for Krushi Ratn agricultural app.
 
+═══════════════════════════════════════════════════════════════════════════
+PRE-RULES: CATEGORY vs FIELD VALUE — READ BEFORE GENERATING ANY SQL
+═══════════════════════════════════════════════════════════════════════════
+
+These 4 blocks MUST be applied BEFORE the numbered rules below. They prevent
+two common bugs: (1) putting state names into city/taluka fields, and
+(2) treating category words as direct product names.
+
+───────────────────────────────────────────────────────────────────────────
+BLOCK 1 — CATEGORY MAP
+───────────────────────────────────────────────────────────────────────────
+These words are CATEGORIES or STATE names — never use them as direct
+product/crop LIKE values. Each one resolves to a specific DB field.
+
+GEOGRAPHIC — State Level
+  Synonyms: gujarat, gujrat, GJ, ગુજરાત, गुजरात  → ગુજરાત
+            rajasthan, राजस्थान                  → રાજસ્થાન
+            maharashtra, महाराष्ट्र              → મહારાષ્ટ્ર
+            madhya pradesh, MP                  → મધ્ય પ્રદેશ
+  Apply via: JOIN cities → states; WHERE s.name LIKE '%<state>%'
+  ❌ DO NOT put state names into c.name / t.name / y.name LIKE clauses.
+
+VEGETABLES (શાકભાજી category)
+  Synonyms: shakbhaji, shak, sabji, sabzi, vegetable, vegetables,
+            શાકભાજી, शाकभाजी, shak bhaji
+  Apply via category subquery (preferred — maintainable):
+    WHERE sc.category_id IN (SELECT id FROM categories
+                             WHERE name LIKE '%શાકભાજી%'
+                             AND deleted_at IS NULL)
+  ❌ DO NOT write: WHERE sc.name LIKE '%શાકભાજી%'  (no crop named "vegetables")
+
+PULSES (કઠોળ category)
+  Synonyms: kathor, kaathor, pulses, dal, daal, legumes, lentils, કઠોળ
+  Apply via category subquery:
+    WHERE sc.category_id IN (SELECT id FROM categories
+                             WHERE name LIKE '%કઠોળ%'
+                             AND deleted_at IS NULL)
+
+ANIMALS (પશુ category — buy_sell only)
+  Synonyms: animal, animals, pashu, pashuo, janavar, livestock, cattle,
+            પશુ, જાનવર, ઢોર, जानवर, पशु
+  Apply via category subquery on buy_sell_categories:
+    WHERE bp.category_id IN (SELECT id FROM buy_sell_categories
+                             WHERE name LIKE '%પશુ%'
+                             AND deleted_at IS NULL)
+
+EQUIPMENT / FARMING EQUIPMENT (ઉપકરણ / કૃષિ યંત્ર category)
+  Synonyms: equipment, equipments, farming equipment, farm equipment,
+            yantra, krushi yantra, machinery, krushi sadhan,
+            ઉપકરણ, કૃષિ યંત્ર, યંત્ર, उपकरण, यंत्र
+  Apply via category subquery:
+    • K-Shop (new equipment):
+      WHERE kp.kshop_category_id IN (SELECT id FROM kshop_categories
+                                     WHERE (name LIKE '%ઉપકરણ%' OR name LIKE '%યંત્ર%')
+                                     AND deleted_at IS NULL)
+    • Buy/Sell (used equipment):
+      WHERE bp.category_id IN (SELECT id FROM buy_sell_categories
+                               WHERE (name LIKE '%ઉપકરણ%' OR name LIKE '%યંત્ર%')
+                               AND deleted_at IS NULL)
+
+───────────────────────────────────────────────────────────────────────────
+BLOCK 2 — HIERARCHY RULE
+───────────────────────────────────────────────────────────────────────────
+Never assign a higher-level word to a lower-level field.
+
+GEOGRAPHIC HIERARCHY:
+  states (ગુજરાત, રાજસ્થાન) → cities (અમદાવાદ, રાજકોટ) →
+  talukas (મહુવા, ગોંડલ) → yards (કૃષિ ઉપજ બજાર સમિતિ ભુજ)
+
+  Rule: A state name belongs ONLY in s.name. A taluka name belongs ONLY
+  in t.name (or city/yard if shared). Never cross-assign.
+
+  ✅ CORRECT — "wheat price in gujarat":
+     ... LEFT JOIN cities c ON y.city_id = c.id
+         LEFT JOIN states s ON c.state_id = s.id
+     WHERE sc.name LIKE '%ઘઉં%'
+       AND s.name LIKE '%ગુજરાત%'
+
+  ✅ CORRECT — "wheat price in surat":
+     WHERE sc.name LIKE '%ઘઉં%'
+       AND (c.name LIKE '%સુરત%' OR t.name LIKE '%સુરત%' OR y.name LIKE '%સુરત%')
+
+  ❌ WRONG — never do this:
+     WHERE c.name LIKE '%ગુજરાત%'  (gujarat is NOT a city)
+     WHERE t.name LIKE '%ગુજરાત%'  (gujarat is NOT a taluka)
+     WHERE y.name LIKE '%ગુજરાત%'  (gujarat is NOT a yard)
+
+DATA HIERARCHY:
+  categories (શાકભાજી, કઠોળ, અનાજ) → sub_categories (ટામેટા, ડુંગળી, ઘઉં)
+
+  Rule: A category name belongs in categories.name (via subquery JOIN).
+  A specific crop name belongs in sub_categories.name (direct LIKE).
+  Never put category words in sub_categories.name LIKE clauses.
+
+───────────────────────────────────────────────────────────────────────────
+BLOCK 3 — CATEGORY FILTER RULE
+───────────────────────────────────────────────────────────────────────────
+Only apply category expansion when the user EXPLICITLY uses a category
+word from Block 1. Never add category filters speculatively.
+
+| User Question         | Category Word Present? | Action                                   |
+|-----------------------|------------------------|------------------------------------------|
+| wheat price gujarat   | gujarat (STATE)        | State filter only via s.name LIKE        |
+| shakbhaji bhav        | shakbhaji (CATEGORY)   | Expand via categories.name subquery      |
+| animal listings       | animal (CATEGORY)      | Expand via buy_sell_categories subquery  |
+| tractor price         | tractor (DIRECT ITEM)  | Direct LIKE: sc.name LIKE '%ટ્રેક્ટર%'     |
+| wheat price today     | none                   | Direct LIKE: sc.name LIKE '%ઘઉં%'         |
+| કોબી ભાવ              | કોબી (DIRECT ITEM)     | Direct LIKE: sc.name LIKE '%કોબી%'        |
+
+GOLDEN RULE:
+  • Direct item name (ટામેટા, ટ્રેક્ટર, ઘઉં, ગાય) → use directly in LIKE
+  • Category name (વેજિટેબલ્સ, ઉપકરણ, પશુ, કઠોળ) → expand via category subquery
+  • State name (ગુજરાત, રાજસ્થાન) → use in s.name LIKE only
+
+───────────────────────────────────────────────────────────────────────────
+BLOCK 4 — SYNONYM MAP (Quick Lookup)
+───────────────────────────────────────────────────────────────────────────
+Resolve these synonyms BEFORE building the WHERE clause:
+
+| Synonym                                       | Resolves To           | Field/Action                |
+|-----------------------------------------------|-----------------------|-----------------------------|
+| shakbhaji/shak/sabji/vegetable/vegetables     | શાકભાજી CATEGORY      | categories.name (subquery)  |
+| kathor/kaathor/pulses/dal/legumes             | કઠોળ CATEGORY         | categories.name (subquery)  |
+| pashu/animal/animals/janavar/livestock        | પશુ CATEGORY          | buy_sell_categories (subq)  |
+| yantra/equipment/equipments/machinery         | ઉપકરણ/યંત્ર CATEGORY  | kshop_categories (subquery) |
+| gujarat/gujrat/GJ                             | ગુજરાત STATE          | states.name (s.name LIKE)   |
+| rajasthan/maharashtra/madhya pradesh          | STATE                 | states.name (s.name LIKE)   |
+
+═══════════════════════════════════════════════════════════════════════════
+END PRE-RULES — apply the rules below AFTER the 4 blocks above
+═══════════════════════════════════════════════════════════════════════════
+
 RULES:
 0. SQL FORMATTING:
    a) SINGLE-LINE SQL — entire SQL value is ONE continuous string. No literal newlines,
@@ -1018,13 +1131,37 @@ RULES:
         return self._parse_sql_response(response.content)
 
     def _parse_sql_response(self, content: str) -> List[Dict]:
-        """Parse LLM SQL response. Sanitizes, validates: must have WHERE, not bare SELECT *."""
+        """Parse LLM SQL response. Sanitizes, validates: must have WHERE, not bare SELECT *.
+
+        Handles BOTH formats from LLM:
+          - Standard: [{"table_name": "...", "sql": "..."}]
+          - Double-encoded: ["{\\"table_name\\": \\"...\\", \\"sql\\": \\"...\\"}"]
+        """
         import re as _re
+        import json as _json
         from app.utils.json_parser import json_parser, sql_sanitizer
         try:
             queries = json_parser.extract_queries_from_text(content)
             if not queries:
                 queries = json_parser.safe_parse(content, default=[], expected_type=list) or []
+
+            # ── HANDLE DOUBLE-ENCODED JSON: ["{...}", "{...}"] → [{...}, {...}]
+            unwrapped = []
+            for q in (queries or []):
+                if isinstance(q, str):
+                    stripped = q.strip()
+                    if stripped.startswith("{") and stripped.endswith("}"):
+                        try:
+                            parsed = _json.loads(stripped)
+                            if isinstance(parsed, dict):
+                                logger.info("🔧 Unwrapped double-encoded JSON string from LLM response")
+                                unwrapped.append(parsed)
+                                continue
+                        except _json.JSONDecodeError:
+                            pass
+                unwrapped.append(q)
+            queries = unwrapped
+
             valid = []
             for q in (queries or []):
                 if not isinstance(q, dict) or "sql" not in q:

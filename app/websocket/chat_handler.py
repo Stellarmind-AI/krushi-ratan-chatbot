@@ -26,7 +26,7 @@ from app.services.agent.orchestrator import get_orchestrator
 from app.services.language_processor import get_language_processor
 from app.services.translation_service import translate_to_user_language, translate_list_to_user_language
 from app.services.agent.confirmation_layer import (
-    get_confirmation_layer, ConfirmedIntent, ConfirmedFlow,
+    get_confirmation_layer, ConfirmedIntent,
     NAV_INTENT_KEY, build_navigation_query,
 )
 
@@ -241,16 +241,19 @@ class ChatHandler:
         #   ClarificationRequest → confidence < 80%, pause and ask user
         #   None                 → no ambiguity, proceed normally
         _sql_enabled = settings.is_sql_enabled
-        # F1 Phase 5: forced_flow lets F1 short-circuit the route agent for
-        # NAVIGATION/GREETING/GENERAL queries. None means "let route agent decide".
-        f1_forced_flow: Optional[str] = None
+        # F1 is now ENTITY-EXTRACTION ONLY. Flow decisions are made by the
+        # route agent (single source of truth). F1 returns:
+        #   - ConfirmedIntent → entity hint; route agent still decides flow
+        #   - ClarificationRequest → ambiguous; pause and show buttons
+        #   - None → no entity detected; route agent decides everything
         if not confirmed_intent and _sql_enabled:
             f1_result = await self.confirmation_layer.check(processed_text)
 
             if isinstance(f1_result, ConfirmedIntent):
-                # High-confidence intent — skip F1 UI, inject directly into pipeline
+                # F1 extracted a clear entity — pass to orchestrator as hint
+                # so the route agent + entity normalizer have context.
                 logger.info(
-                    "F1 HIGH CONFIDENCE",
+                    "F1 ENTITY DETECTED",
                     intent=f1_result.intent_key,
                     confidence=f"{f1_result.confidence:.0%}",
                     keyword=f1_result.keyword,
@@ -264,15 +267,6 @@ class ChatHandler:
                 # and the entire normalization path short-circuits.
                 if f1_result.keyword:
                     keyword_hint = f1_result.keyword
-
-            elif isinstance(f1_result, ConfirmedFlow):
-                # F1 also classified the flow — skip route agent entirely.
-                logger.info(
-                    "F1 FORCED FLOW",
-                    flow=f1_result.flow,
-                    session_id=session_id,
-                )
-                f1_forced_flow = f1_result.flow
 
             elif f1_result is not None:
                 # Low-confidence — pipeline paused, ask user
@@ -320,7 +314,6 @@ class ChatHandler:
                     confirmed_intent=confirmed_intent,  # F1: None on first pass; set on resume
                     keyword_hint=keyword_hint,          # F1: matched keyword for SQL targeting
                     force_navigation=force_navigation,  # Nav signal detected — skip route agent
-                    forced_flow=f1_forced_flow,         # F1 Phase 5: NAVIGATION|GREETING|GENERAL — skip route agent
                 )
                 english_answer = result.get("answer", "")
             except Exception as e:

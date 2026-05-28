@@ -249,32 +249,22 @@ _SCENARIO_BUILDERS = {
 # -----------------------------------------------------------------------------
 
 _F1_SYSTEM = (
-    "You are F1, intent classifier for Krushi Ratn (Gujarati farming app).\n"
+    "You are F1, an ENTITY EXTRACTOR for Krushi Ratn (Gujarati farming app).\n"
     "Input: English/Romanized Gujarati/Gujarati script/Hindi. Output: JSON only.\n"
+    "\n"
+    "YOUR ONE JOB: Detect domain entities (crops, equipment, animals, seeds,\n"
+    "news, videos, prices, locations) in the user query. You do NOT decide\n"
+    "the flow — the route agent does that. If no clear entity is detected,\n"
+    "return skip and the route agent will handle it.\n"
     "\n"
     "RULES (apply in order):\n"
     "\n"
-    "R1: COUNT/QUANTITY → skip (no flow)\n"
+    "R1: COUNT/QUANTITY → skip\n"
     "  Triggers: how many/much, ketla/કેટલા/कितने, count, total, kul/કુલ, sankhya/સંખ્યા/संख्या\n"
     "  Ex: \"how many products\", \"ketla crops\", \"કેટલા યાર્ડ\", \"कितने videos\" → skip\n"
     "  EXCEPT: \"how much\" + price word (bhav/ભાવ/कीमत) → use R5 (price question)\n"
     "\n"
-    "R2: PROCESS how-to/where-to/can-i → skip:NAVIGATION\n"
-    "  ANY query asking HOW/WHERE/CAN I do something is NAVIGATION, including account actions.\n"
-    "  Triggers: how (to|do|can|i), where (to|can i), can i, kevi rite/કેવી રીતે, kem karvu/કેમ કરવું, kaise/कैसे\n"
-    "  Applies to: app features, account management, profile updates, mobile number changes, ALL app actions.\n"
-    "  Ex: \"how to view bhav\", \"kevi rite pak vechuv\", \"can i change mobile number\",\n"
-    "      \"how to update profile\", \"where to change number\" → skip:NAVIGATION\n"
-    "\n"
-    "R3: SELL intent → skip:NAVIGATION\n"
-    "  Triggers: sell, list (for sale), post, vechuv/વેચવું/बेचना, listing muku\n"
-    "  Ex: \"i want to sell wheat\", \"cow vechvi che\", \"ગાય વેચવી છે\" → skip:NAVIGATION\n"
-    "\n"
-    "R4: BUY intent → skip:NAVIGATION\n"
-    "  Triggers: (want to|looking to|can i) buy/purchase/order, kharidu/ખરીદવું/खरीदना, mane joie\n"
-    "  Ex: \"i want to buy tractor\", \"mane cow joie\", \"ટ્રેક્ટર ખરીદવું છે\" → skip:NAVIGATION\n"
-    "\n"
-    "R5: PRICE word + subject (no count/process/buy/sell from R1-4) → CLEAR data\n"
+    "R5: PRICE word + subject → CLEAR data entity\n"
     "  Price words: bhav/ભાવ, keemat/કિંમત/कीमत, price, rate\n"
     "  Ex: \"kapas bhav\" → clear:crop_price,kapas\n"
     "      \"buffalo bhav\", \"ગાય ભાવ\" → clear:buy_sell_product,buffalo\n"
@@ -284,24 +274,11 @@ _F1_SYSTEM = (
     "  Ex: \"price in rajkot\", \"mahuva ma bhav\", \"રાજકોટ માં ભાવ\" → clear:crop_price\n"
     "      \"onion price mahuva\" → clear:crop_price,onion (use crop as keyword)\n"
     "\n"
-    "R7: PROBLEMS or CONCEPTS (not how-to) → skip:GENERAL\n"
-    "  ONLY for: problems (not working), errors, or concept questions (what is X).\n"
-    "  NOT for how-to/can-i questions (those are R2:NAVIGATION).\n"
-    "  Triggers: otp/ओटीपी/ઓટીપી (nahi mila|nahi aaya|નથી આવ્યો|not received),\n"
-    "           login/લૉગિન/लॉगिन (nahi ho raha|na thay|નથી થતું|not working),\n"
-    "           password/પાસવર્ડ/पासवर्ड (bhul gaya|ભૂલી ગયો|forgot),\n"
-    "           account/register/mobile not working, app crash,\n"
-    "           \"what is krushi ratn/otp/yard\", \"is app free\" (concepts),\n"
-    "           \"what payment methods\", \"payment available\", \"can i pay by card/UPI\" (policy)\n"
-    "  Ex: \"otp nahi mila\", \"login નથી થતું\", \"password bhul gaya\" → skip:GENERAL\n"
-    "      \"mobile number not updating\", \"can't change number\" → skip:GENERAL\n"
-    "      \"what payment methods\", \"is UPI available\", \"payment options\" → skip:GENERAL\n"
-    "  vs NAVIGATION: \"how to enter otp\", \"how to pay for order\", \"payment કેવી રીતે કરવું\" → skip:NAVIGATION (use R2)\n"
-    "GREETINGS → skip:GREETING\n"
-    "  Ex: \"hello\", \"hi\", \"namaste\", \"kem cho/કેમ છો\", \"sat sri akal\" → skip:GREETING\n"
+    "DEFAULT: If no entity matches the rules above → skip (no entity detected).\n"
+    "The route agent will then decide flow (SQL / NAVIGATION / GENERAL / GREETING).\n"
     "\n"
     "DECISIONS:\n"
-    "skip → {\"decision\":\"skip\",\"flow\":\"NAVIGATION|GREETING|GENERAL\"} or {\"decision\":\"skip\"}\n"
+    "skip → {\"decision\":\"skip\"}\n"
     "clear → {\"decision\":\"clear\",\"intent\":\"<intent>\",\"keyword\":\"<subject>\"}\n"
     "ambiguous → {\"decision\":\"ambiguous\",\"scenario\":\"<scenario>\",\"keyword\":\"<subject>\"}\n"
     "\n"
@@ -331,7 +308,7 @@ _F1_SYSTEM = (
     "• Generic products/items → product\n"
     "• Bare location → location\n"
     "\n"
-    "EXAMPLES:\n"
+    "EXAMPLES (entity extraction only — flow decisions are NOT your job):\n"
     "\"wheat seed\"/\"ghau bij\"/\"ઘઉં બીજ\" → clear:seed_info,wheat\n"
     "\"new tractor\"/\"naya pump\"/\"નવું મોટર\" → clear:equipment_kshop,tractor\n"
     "\"juno tractor\"/\"used motor\"/\"જૂનો પંપ\" → clear:equipment_used,tractor\n"
@@ -346,20 +323,18 @@ _F1_SYSTEM = (
     "\"products\"/\"items\" → ambiguous:product\n"
     "\"bhav?\"/\"price\" → ambiguous:price\n"
     "\"surat\"/\"rajkot\"/\"રાજકોટ\" → ambiguous:location,surat\n"
-    "\"how to change mobile number\"/\"can i update mobile number\" → skip:NAVIGATION\n"
-    "\"mobile number kevi rite badlavu\"/\"number change kevi rite\" → skip:NAVIGATION\n"
-    "\"how to update profile\"/\"where to change number\" → skip:NAVIGATION\n"
-    "\"otp nahi mila\"/\"ओटीपी नहीं मिला\"/\"otp નથી આવ્યો\" → skip:GENERAL\n"
-    "\"login na thay\"/\"लॉगिन नहीं हो रहा\" → skip:GENERAL\n"
-    "\"password bhuli gayo\"/\"पासवर्ड भूल गया\" → skip:GENERAL\n"
-    "\"mobile number not updating\"/\"can't change number\" → skip:GENERAL\n"
-    "\"how to view wheat price\"/\"bhav kevi rite jovo\" → skip:NAVIGATION\n"
-    "\"i want to sell cow\"/\"pak vechvu che\" → skip:NAVIGATION\n"
-    "\"ketla products\"/\"કેટલા ગાય\"/\"कितने crops\" → skip (no flow)\n"
-    "\"hello\"/\"kem cho\"/\"નમસ્તે\" → skip:GREETING\n"
+    "\"can i see latest animal listings?\" → ambiguous:animal,animal\n"
+    "\"show me cow listings\" → ambiguous:animal,cow\n"
+    "\"can i view tractor listings?\" → ambiguous:equipment,tractor\n"
+    "\"how to change mobile number\"/\"can i update mobile number\" → skip\n"
+    "\"mobile number kevi rite badlavu\" → skip\n"
+    "\"otp nahi mila\"/\"login na thay\"/\"password bhul gaya\" → skip\n"
+    "\"i want to sell cow\"/\"pak vechvu che\" → skip\n"
+    "\"hello\"/\"kem cho\"/\"નમસ્તે\" → skip\n"
+    "\"ketla products\"/\"કેટલા ગાય\"/\"कितने crops\" → skip\n"
     "\n"
     "OUTPUT: JSON only, no markdown/explanation:\n"
-    "{\"decision\":\"skip\",\"flow\":\"NAVIGATION|GREETING|GENERAL\"} or {\"decision\":\"skip\"}\n"
+    "{\"decision\":\"skip\"}\n"
     "{\"decision\":\"clear\",\"intent\":\"<intent>\",\"keyword\":\"<subject>\"}\n"
     "{\"decision\":\"ambiguous\",\"scenario\":\"<scenario>\",\"keyword\":\"<subject>\"}"
 )
@@ -387,7 +362,7 @@ class ConfirmationLayer:
 
     async def check(
         self, user_query: str
-    ) -> Optional[Union[ClarificationRequest, ConfirmedIntent, ConfirmedFlow]]:
+    ) -> Optional[Union[ClarificationRequest, ConfirmedIntent]]:
 
         q_orig = user_query.strip()
 
@@ -420,13 +395,11 @@ class ConfirmationLayer:
         decision = result.get("decision", "skip")
         keyword  = result.get("keyword", "").strip()
 
-        # SKIP — navigation, greeting, general app question
+        # SKIP — F1 found no clear entity. Route agent decides the flow.
+        # F1 no longer returns ConfirmedFlow — flow decisions are now the
+        # route agent's sole responsibility (clean separation of concerns).
         if decision == "skip":
-            flow = (result.get("flow") or "").strip().upper()
-            if flow in ("NAVIGATION", "GREETING", "GENERAL"):
-                logger.info(f"F1 SKIP+FLOW — flow={flow} | {q_orig[:60]!r}")
-                return ConfirmedFlow(flow=flow)
-            logger.info(f"F1 SKIP (no flow) — falling back to route agent: {q_orig[:60]!r}")
+            logger.info(f"F1 SKIP — no entity detected, route agent will decide flow: {q_orig[:60]!r}")
             return None
 
         # CLEAR — single unambiguous domain
