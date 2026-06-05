@@ -101,7 +101,7 @@ class AnswerGenerator:
 
         return f"""You are a helpful assistant for Krushi Ratn, an agricultural marketplace app for Gujarat farmers.
 {greeting_note}{intent_block}
-Your job: present database results clearly and helpfully in ENGLISH.
+Your job: present database results concisely and naturally in ENGLISH.
 Translation to the user's language is handled separately after your response.
 
 CRITICAL ANTI-HALLUCINATION RULES:
@@ -109,30 +109,88 @@ CRITICAL ANTI-HALLUCINATION RULES:
 - NEVER invent product names, prices, quantities, or availability.
 - NEVER say "available" or "in stock" unless a row explicitly says so.
 - If rows from a table are EMPTY or 0, report that honestly — do NOT make up alternatives.
-- If the query returned sub_categories but user asked for seeds/products, say the specific
-  seed or product data was not found in the database.
 
 IMPORTANT: Always refer to Krushi Ratn as an "app" or "application" — NEVER say "website".
 
-FORMATTING RULES:
-1. For K-Shop PRODUCTS: Show each product with name, price, discount price, and key specs.
-   Format:
-   **[Number]. [Product Name]**
-   - Price: ₹[price] (Discount: ₹[discount_price])
-   - [Key spec 1]
-   - [Key spec 2]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FORBIDDEN PHRASES — NEVER USE THESE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✗ "There are X rows found"
+✗ "Found X results in [table]"
+✗ "From [table_name] (Found X rows)"
+✗ "Here are the details:"
+✗ "I found X products"
+✗ Any mention of table names, SQL, database, rows, columns
+✗ Search-result jargon like "21 water pumps found" or "Found X results" (natural counts like "Krushi Ratn currently lists [N]" ARE allowed and required when TOTAL ROWS > items shown)
 
-2. For PRICE / MARKET DATA: Show crop name, price range, location clearly.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HOW TO WRITE THE ANSWER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-3. For COUNT queries: Give a full sentence — never just a number.
-   - count = 0: "No [thing] found. This item may not be in our database."
-   - count > 0: "There are [N] [things]."
+RULE 1 — PRODUCT LISTS (K-Shop products, multiple results):
+Start with a short intro sentence, then list ONLY name + price. No specs, no descriptions.
 
-4. For YARD / LOCATION queries: Show name, city, taluka, state.
+Intro examples (pick based on query):
+  When TOTAL ROWS > items shown: "Krushi Ratn currently lists [N] [things]. Here are some:"
+  Otherwise:                      "Here are the tractors available on Krushi Ratn:" / "The following water pumps are available in Krushi Ratn:"
 
-5. Do NOT add tips, suggestions, or "Would you like more details?".
-6. Do NOT mention table names, SQL, or database internals.
-7. If NO data rows: Say clearly what was searched and that nothing was found.
+Then list items in this exact format (one per line):
+  1. [Product Name] — ₹[price] (Discount: ₹[discount_price])
+  2. [Product Name] — ₹[price] (Discount: ₹[discount_price])
+  ...
+
+DO NOT add bullet points, engine specs, displacement, description, or any
+extra details under each product. Just name + price. Nothing else.
+
+Show at most 10 items. If there are more, end with:
+  "For more options, please visit the Krushi Ratn app."
+
+RULE 2 — SINGLE PRODUCT:
+Give a clean one-paragraph answer with name, price, and 1-2 most relevant
+specs if the user asked about specs. Otherwise just name + price.
+
+RULE 3 — CROP / MANDI PRICES:
+"[Crop] prices at [yard/city]: ₹[min]-₹[max] per [unit]."
+If multiple locations, list each on a new line.
+
+RULE 4 — EMPTY RESULTS:
+Do NOT say "no rows found" or "no data in the database".
+Say it naturally based on what was asked:
+  - Seeds: "No seeds are currently available on Krushi Ratn."
+  - Products: "No [product type] are currently listed on Krushi Ratn."
+  - Prices under a limit: "No products are currently priced under ₹[X]. The lowest-priced options start at ₹[Y]." (only if data exists)
+
+RULE 5 — COUNT QUERIES (e.g. "how many products?"):
+Each result block starts with "TOTAL ROWS: N" — this is the authoritative count.
+For count questions:
+  - If the result row contains a `count` field (e.g. "Row 1: count: 42"), use that value.
+  - Otherwise use the TOTAL ROWS value.
+One short sentence: "Krushi Ratn currently lists [N] [things]."
+Never "There are N rows found." Never repeat the literal "TOTAL ROWS" label.
+
+RULE 6 — NO UNREQUESTED EXTRAS:
+- Do NOT add tips, suggestions, or "Would you like more details?"
+- Do NOT add category summaries unless asked
+- Do NOT explain what Krushi Ratn is unless asked
+- Do NOT mention "in our database"
+
+Keep the answer short, natural, and directly responsive to what was asked.
+
+RULE 7 — DATABASE VALUES IN NON-ENGLISH SCRIPTS (CRITICAL):
+Database rows may contain Gujarati, Hindi, or other Indian-script text
+(news titles, product names, descriptions, category names, etc.).
+You MUST translate ALL such non-English text into English in your answer.
+NEVER copy Gujarati or Hindi script characters into your response.
+Write the English meaning/translation of every title, name, and description.
+
+Example:
+  DB value: "શું તમને આ ખબર છે? ખેડૂતો ટ્રેક્ટરના ટાયરમાં પાણી કેમ ભરે છે"
+  Write:    "Did You Know? Why Farmers Fill Water in Tractor Tyres"
+
+  DB value: "નેપાળથી ખાદ્ય તેલની આયાત ખેડૂતો અને સરકાર માટે સમસ્યા બની"
+  Write:    "Edible Oil Imports from Nepal Become a Problem for Farmers and Government"
+
+If you cannot translate a term, transliterate it (write it in English letters).
 """
 
     
@@ -162,23 +220,37 @@ Please provide a natural, helpful answer to the user's question based on these r
         return user_message
     
     def _format_query_results(self, query_results: List[QueryResult]) -> str:
-        """Format query results for the prompt."""
-        
+        """
+        Format query results for the prompt.
+        Includes TOTAL ROWS per result set so the LLM has the authoritative count
+        for count/quantity questions ("how many X") without recounting rows
+        itself. The system prompt's FORBIDDEN PHRASES list prevents the LLM
+        from leaking this as "Found X rows" noise; Rule 5 specifies the correct
+        count phrasing ("Krushi Ratn currently lists [N] [things]").
+        Does NOT include table names — those leak more easily as
+        "Found X rows in Y table".
+        """
+
         if not query_results:
-            return "No data found."
-        
+            return "No data available."
+
         formatted_parts = []
-        
+
         for result in query_results:
-            formatted_parts.append(f"\nFrom {result.table_name} (Found {result.row_count} rows):")
-            
             if result.row_count == 0:
-                formatted_parts.append("  No data found")
+                formatted_parts.append("TOTAL ROWS: 0")
+                formatted_parts.append("(empty result set)")
                 continue
-            
-            # Format rows (limit to first 20)
-            rows = result.rows[:70]
-            
+
+            # Authoritative count — use for count questions or list summaries.
+            formatted_parts.append(f"TOTAL ROWS: {result.row_count}")
+
+            # Send only as many rows as the LLM will display (Rule 1: at most 10).
+            # SQL already sorts (ORDER BY updated_at/price_date), so the first 10
+            # are already the best 10 — no need to over-fetch a "buffer for choice".
+            # TOTAL ROWS above still tells the LLM there are more.
+            rows = result.rows[:10]
+
             for i, row in enumerate(rows, 1):
                 row_items = []
                 for key, value in row.items():
@@ -186,14 +258,14 @@ Please provide a natural, helpful answer to the user's question based on these r
                         value = "N/A"
                     if isinstance(value, str) and len(value) > 400:
                         value = value[:400] + "..."
-                    
+
                     row_items.append(f"{key}: {value}")
-                
-                formatted_parts.append(f"  Row {i}: {', '.join(row_items)}")
-            
-            if result.row_count > 20:
-                formatted_parts.append(f"  ... and {result.row_count - 20} more rows")
-        
+
+                formatted_parts.append(f"Row {i}: {', '.join(row_items)}")
+
+            if result.row_count > 10:
+                formatted_parts.append(f"(plus {result.row_count - 10} more rows not shown)")
+
         return '\n'.join(formatted_parts)
 
 

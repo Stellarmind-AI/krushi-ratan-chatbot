@@ -22,7 +22,6 @@
         "kshop category",
         "kshop show details",
         "yes buy",
-        "confirm order kshop",
         "kshop purchase kevi rite",
         "કે-શોપ",
         "કેશોપ",
@@ -35,7 +34,7 @@
       ],
       "screen": "K-Shop — Buy Product",
       "description": "How to purchase a product from K-Shop",
-      "how_to_use": "Step 1: Go to K-Shop section.\nStep 2: Select your required category.\nStep 3: Tap on 'Show Details' on the required product.\nStep 4: Tap on 'Buy Now'.\nStep 5: Click on 'Yes, Buy' to confirm your order.",
+      "how_to_use": "Step 1: Go to K-Shop section.\nStep 2: Select your required category.\nStep 3: Tap on 'Show Details' on the required product.\nStep 4: Tap on 'Buy Now'.\nStep 5: Click on 'Yes, Buy' to place your order.\nNote: Order confirmation is done by the Krushi Ratn team — not by the user. To check your order status, go to My Orders → Krushi Store.",
       "not_for": "Do NOT use this flow for buying crops (pak/pako/agricultural produce) from farmers. K-Shop is ONLY for tools, seeds, fertilizers, and agricultural supplies."
     },
     {
@@ -65,7 +64,7 @@
       ],
       "screen": "K-Shop — Cancel Order",
       "description": "How to cancel a placed K-Shop order",
-      "how_to_use": "Step 1: Go to Home Screen.\nStep 2: Click on 'My Orders'.\nStep 3: Click on 'Krushi Store'.\nStep 4: Select the order you want to cancel.\nStep 5: Click on 'Cancel Order'.\nStep 6: Confirm Cancellation.\nStep 7: You will see a Cancellation Success message."
+      "how_to_use": "Step 1: Go to Home Screen.\nStep 2: Click on 'My Orders'.\nStep 3: Click on 'K-Store'.\nStep 4: Select the order you want to cancel.\nStep 5: Click on 'Cancel Order'.\nStep 6: Confirm Cancellation.\nStep 7: You will see a Cancellation Success message."
     },
     {
       "id": "nav_kshop_view_order",
@@ -82,6 +81,18 @@
         "mara orders",
         "order history",
         "kshop order joi",
+        "confirm order", 
+        "order confirm", 
+        "order confirmation", 
+        "order confirmed", 
+        "order status", 
+        "kshop order confirm",
+        "team confirm order", 
+        "order confirm thai gayo", 
+        "confirm thai gayo", 
+        "ઓર્ડર કન્ફર્મ", 
+        "ઓર્ડર સ્ટેટસ", 
+        "ઓર્ડર થઈ ગયો",
         "મારો ઓર્ડર જોવો",
         "ઓર્ડર જોવો",
         "ઓર્ડર ચેક",
@@ -94,8 +105,8 @@
         "ઓર્ડર ક્યાં સુધી પહોંચ્યો"
       ],
       "screen": "K-Shop — View My Orders",
-      "description": "How to view placed K-Shop orders",
-      "how_to_use": "Step 1: Go to Home Screen.\nStep 2: Click on 'My Orders'.\nStep 3: Click on 'Krushi Store'.\nStep 4: Click on the order you want to see."
+      "description": "How to view placed K-Shop orders and check order status. Order confirmation is handled by the Krushi Ratn team — users can track their order progress here.",
+      "how_to_use": "Step 1: Go to Home Screen.\nStep 2: Click on 'My Orders'.\nStep 3: Click on 'K-Store'.\nStep 4: Click on the order you want to see.\nNote: Order confirmation is done by the Krushi Ratn team. You will see your order status updated here once confirmed."
     },
     {
       "id": "nav_crop_sell",
@@ -286,7 +297,7 @@
       ],
       "screen": "Buy/Sell — Sell a Product (Seller)",
       "description": "How to list a product for sale on the Buy/Sell marketplace",
-      "how_to_use": "Step 1: Click on the 'Buy Sell' tab.\nStep 2: Click on 'Sell Your'.\nStep 3: Select the category in which you want to sell your product - ટ્રેક્ટર, ભેંસ, ગાય, ઘોડો, ખેતી ઓજાર, etc.\nStep 4: Fill the form with required details.\nStep 5: Click the 'Submit' button to list your product for sale."
+      "how_to_use": "Step 1: Click on the 'Buy Sell' tab.\nStep 2: Click on '+' icon.\nStep 3: Click on 'Sell Your'.\nStep 4: Select the category in which you want to sell your product - ટ્રેક્ટર, ભેંસ, ગાય, ઘોડો, ખેતી ઓજાર, etc.\nStep 5: Fill the form with required details.\nStep 6: Click the 'Submit' button to list your product for sale."
     },
     {
       "id": "nav_buysell_view_listed",
@@ -577,6 +588,7 @@
       "tags": [
         "create account",
         "register",
+        "how to register account",
         "sign up",
         "new account",
         "account kevi rite banavshu",
@@ -598,11 +610,12 @@
         "એકાઉન્ટ કેવી રીતે બનાવવું",
         "ક્રૃષિ રત્ન એકાઉન્ટ",
         "ફોન નોંધ",
-        "નવો યૂઝ"
+        "નવો યૂઝ",
+        "નોંધણી કરવા માટે"
       ],
       "screen": "Register / Create Account",
       "description": "How to create a new Krushi Ratn account",
-      "how_to_use": "Step 1: Open the Krushi Ratn app.\nStep 2: Tap 'Register'.\nStep 3: Enter your mobile number.\nStep 4: Enter the OTP sent to your phone.\nStep 5: Fill in your details and tap 'Create Account'."
+      "how_to_use": "Step 1: Open the KrushiRatn app.\nStep 2: Select the role you want to create an account for (Farmer / Company / Video Creator).\nStep 3: Enter your name and mobile number.\nStep 4: Fill in location and other required details.\nStep 5: Enter OTP.\nStep 6: Click the 'Submit' button."
     },
     {
       "id": "nav_ai_chatbot",

@@ -37,6 +37,63 @@ class RouteAgent:
 
     _SYSTEM = """You are a question classifier for Krushi Ratn — a Gujarati agricultural marketplace mobile app for farmers.
 
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — DETERMINE EXPECTED OUTPUT TYPE (DO THIS FIRST, BEFORE ANYTHING ELSE)
+═══════════════════════════════════════════════════════════════════════════
+
+Before doing anything else, ask: WHAT WILL SATISFY THIS USER?
+
+TYPE DATA (→ SQL):
+  User wants records, listings, prices, counts, or any DB values on screen.
+  Signal: query contains a domain noun AND the user wants to view/receive it.
+  Domain nouns (any language): animal, cow, buffalo, goat, cattle, crop,
+    wheat, cotton, onion, price, bhav, keemat, listing, listings, order,
+    orders, product, products, tractor, equipment, pashu, yadi, ઢોર, ગાય,
+    ભાવ, કિંમત, યાદી, पशु, गाय, भाव, कीमत, सूची, record, records, stock,
+    details, news, samachar, ખબર, खबर, video, વિડિઓ, वीडियो.
+  Classify as DATA regardless of phrasing — "can i see", "show me",
+  "where can i find", "i want to check", "tell me", "give me" ALL mean
+  DATA if a domain noun is present.
+
+TYPE STEPS (→ NAVIGATION):
+  User wants to know HOW to perform an action inside the app UI.
+  Signal: user wants to DO something (sell, buy, add, create, update,
+  change, cancel, edit, register, login, pay, upload, post, switch,
+  verify, badlavu, karvu, રજિસ્ટર, કરવું, बदलना, करना) where the
+  action is performed inside the app.
+  NO domain noun present (or noun is incidental, like "change MOBILE NUMBER").
+
+TYPE ANSWER (→ GENERAL or GREETING):
+  User needs a direct conversational response — no DB lookup, no app steps.
+  Signal:
+    • Greeting only (hello, hi, namaste, kem cho, કેમ છો) → GREETING
+    • App error (otp not working, login failed, password forgot) → GENERAL
+    • Concept question (what is X, what is yard, what is krushi ratn) → GENERAL
+    • Policy question (is app free, can i use Gujarati, payment methods) → GENERAL
+
+CRITICAL RULE — OVERRIDES EVERYTHING:
+  Sentence structure is IRRELEVANT.
+  Opening verb is IRRELEVANT.
+  "can i", "how do i", "where can i", "show me", "where to" — ALL IGNORED.
+  Only the EXPECTED OUTPUT determines the flow.
+  If a domain noun is present and user wants to SEE/RECEIVE data
+  → ALWAYS TYPE DATA → ALWAYS SQL.
+
+EXAMPLES (output-type wins over phrasing):
+  "can i see animal listings"      → TYPE DATA → SQL    (animal is domain noun)
+  "where can i view tractors"      → TYPE DATA → SQL    (tractor is domain noun)
+  "show me kapas bhav"             → TYPE DATA → SQL    (kapas + bhav = data)
+  "can i change mobile number"     → TYPE STEPS → NAV   (change = action, no data noun)
+  "how to sell a cow"              → TYPE STEPS → NAV   (sell = action verb)
+  "show me how to register"        → TYPE STEPS → NAV   ("how to" wins, no data noun)
+  "hello"                          → TYPE ANSWER → GREETING
+  "otp nahi mila"                  → TYPE ANSWER → GENERAL  (app error)
+  "what is krushi ratn"            → TYPE ANSWER → GENERAL  (concept)
+
+═══════════════════════════════════════════════════════════════════════════
+STEP 2 — APPLY ROUTING (using STEP 1 decision as primary guide)
+═══════════════════════════════════════════════════════════════════════════
+
 Classify the user question into EXACTLY ONE category:
 
 SQL
@@ -52,6 +109,24 @@ SQL
   - Which yards are in a specific taluka or district (live DB lookup)
   - What yard is in my taluka / nearby yard search (live DB lookup)
   - Order history or status
+  - Listing / enumerating items the app currently tracks: list of crops,
+    list of yards, list of cities, list of K-Shop products, list of news
+    (any "show / list / enumerate / give me all" intent that wants the
+    actual live set, not a static description)
+  - COUNT / QUANTITY / AMOUNT questions about ANY database entity — the
+    user is asking for a NUMBER that must be computed from live data.
+    Triggers (any language, any phrasing):
+      English:    how many, how much (without price word), count of,
+                  number of, total of, total number, give me count of,
+                  tell me count of, total <X>
+      Romanized:  ketla, ketli, ketlu, ketle, kul ketla, ganatari,
+                  sankhya, kitne, kitni, kitna, kul kitne
+      Gujarati:   કેટલા, કેટલી, કેટલું, કુલ, ગણતરી, સંખ્યા
+      Hindi:      कितने, कितनी, कितना, कुल, संख्या
+    Apply to ANY entity (products, talukas, cities, yards, users, orders,
+    videos, news, crops, animals, etc.) and ANY natural phrasing —
+    including broken/mixed grammar like "how much products kshop have"
+    or "bhavnagar ma ketli talukas che".
 
 NAVIGATION
   User wants HOW TO USE the app — step-by-step instructions:
@@ -67,7 +142,7 @@ NAVIGATION
   - How to contact support
   - How to update profile
   - How to use the app / what features are available (step-by-step)
-  - How to list an old item for sale / how does buy-sell process work
+  - How to list an old item for sale
   - How to sell crops / pak vechuv kevi rite
   - How to BUY CROPS from farmers (company role crop buying process)
   - I want to buy crops / mane pak kharido / pak kharidu / maro pak kharidu
@@ -90,13 +165,14 @@ GENERAL
   - Does the app show government schemes for farmers? (gq_016)
   - How does the AI chatbot work? (gq_017)
   - How does buying work on the Buy/Sell marketplace? (gq_018)
+  - How does the process of buying and selling farming equipment and animals work? (gq_038)
+  - How does the buyer contact the seller? (gq_039)
   - How does Krushi Ratn AI help farmers? (gq_019)
   - What agricultural products are available in K-Store? (overview, not live prices) (gq_021)
   - What is a yard in Krushi Ratn? (concept explanation, not a specific yard lookup) (gq_024)
   - What products are sold in a yard? (crop types overview) (gq_025)
   - What weight units are used in the app? (Mann, Kilogram, Ton) (gq_026)
   - What products are there in Krushi Ratn? (overview of all sections) (gq_027)
-  - What crops are available in Krushi Ratn? (overview list) (gq_028)
   - What cities are there in Krushi Ratn? (coverage overview) (gq_029)
   - What can I do on Krushi Ratn? (capabilities overview) (gq_030)
   - What services does the app provide to farmers? (gq_031)
@@ -106,7 +182,7 @@ GENERAL
   - What should I do if I face issues with the app? (troubleshooting) (gq_035)
   - What languages does the chatbot support? (gq_036)
   - What features are available on the home screen? (gq_037)
-  - What makes Krushi Ratn different from other apps? (gq_038)
+  - What makes Krushi Ratn different from other apps? (gq_037)
 
 GREETING
   Pure greeting only with NO real question.
@@ -116,14 +192,26 @@ CRITICAL DISAMBIGUATION — these pairs are easy to confuse:
   "What is a yard?" (concept) → GENERAL
   "Which yards are in Rajkot taluka?" (specific lookup) → SQL
 
-  "What crops are available in Krushi Ratn?" (overview list) → GENERAL
-  "Kapas bhav surat" (live price) → SQL
+  "What crops are available in Krushi Ratn?" (live list from DB) → SQL
+  "Show crops in Krushi Ratn" (live list from DB) → SQL
+  "List all crops" (live list from DB) → SQL
+  "What all crops are there?" (live list from DB) → SQL
+  "Show list of crops present in krushiratn" (live list from DB) → SQL
+  "Kapas bhav surat" (live price for a SPECIFIC crop) → SQL
 
-  "What products are in K-Shop?" (overview) → GENERAL
+  "What products are in K-Shop?" (live product list) → SQL
+  "Show K-Shop products avaliable in Krushiratna" (browsing product list) → SQL
   "Balwan Power Weeder price" (specific product price) → SQL
 
   "How does the AI chatbot work?" (overview) → GENERAL
-  "Show me kapas bhav" (live data) → SQL
+  "Show me kapas bhav" (live data for specific crop) → SQL
+
+  KEY RULE: Any "show / list / enumerate / what all / give me all" question
+  that asks for the SET OF ITEMS the app tracks (crops, yards, cities,
+  products, news) is SQL — fetch from DB. GENERAL is only for static
+  conceptual questions ("what IS a yard", "is the app free", "how does
+  the chatbot work"). When in doubt between "list of X" and "concept of X",
+  prefer SQL.
 
   "What should I do if I face app issues?" (guidance) → GENERAL
   "How do I contact support?" (step-by-step) → NAVIGATION
@@ -136,6 +224,13 @@ CRITICAL DISAMBIGUATION — these pairs are easy to confuse:
 
   "What features are on the home screen?" (overview) → GENERAL
   "How do I use the home screen?" (step-by-step) → NAVIGATION
+
+  "How does the buy-sell process work?" (explaining the mechanism) → GENERAL
+  "How does buying and selling work in the app?" (explaining the mechanism) → GENERAL
+  "ખરીદવા-વેચવાની પ્રક્રિયા કેવી રીતે કામ કરે છે?" (explaining mechanism) → GENERAL
+  "ખરીદનાર અને વેચનાર વચ્ચે સંપર્ક કેવી રીતે થાય છે?" (explaining how contact works) → GENERAL
+  "How do I list an item for sale?" (step-by-step instructions) → NAVIGATION
+  "How do I post an ad on buy/sell?" (step-by-step instructions) → NAVIGATION
 
   "What makes Krushi Ratn different?" (comparison/overview) → GENERAL
   "How do I switch roles?" (step-by-step) → NAVIGATION
@@ -170,7 +265,23 @@ Examples:
   "app ni suvidha batao" → GENERAL
   "krushi ratn ma shu kari shakay" → GENERAL
   "yard shu hoy" → GENERAL
-  "kayi crops uplabdh che" → GENERAL
+  "kayi crops uplabdh che" → SQL
+  "show crops in krushiratna" → SQL
+  "show kshop products in krushiratna" → SQL
+  "list all crops" → SQL
+  "show me all crops" → SQL
+  "show list of crops present in krushiratn" → SQL
+  "crops in krushi ratn" → SQL
+  "how many products in kshop" → SQL
+  "how many talukas in bhavnagar" → SQL
+  "how many cities in gujarat" → SQL
+  "count of crops available" → SQL
+  "total number of yards" → SQL
+  "give me total cows in buy sell" → SQL
+  "bhavnagar ma ketli talukas che" → SQL
+  "kitne videos uploaded last month" → SQL
+  "ગોંડલ માં કેટલા યાર્ડ છે" → SQL
+  "કુલ કેટલા ગાય છે" → SQL
   "app ma weight unit shu che" → GENERAL
   "buyer aavya par shu karvu" → GENERAL
   "kharidi karta pahela shu jovu" → GENERAL
@@ -181,6 +292,12 @@ Examples:
   "home screen ma shu che" → GENERAL
   "krushi ratn bija apps thi alag shu che" → GENERAL
   "home screen features" → GENERAL
+  "buy sell process kevi rite kaam kare" → GENERAL
+  "kharidi vechan ni prakriya shu che" → GENERAL
+  "how does buy sell work" → GENERAL
+  "buyer seller contact kevi rite thay" → GENERAL
+  "ખરીદવા-વેચવાની પ્રક્રિયા કેવી રીતે કામ કરે છે?" → GENERAL
+  "ખરીદનાર અને વેચનાર વચ્ચે સંપર્ક કેવી રીતે થાય છે?" → GENERAL
   "role switch kevi rite" → NAVIGATION
   "video kevi rite upload karvu" → NAVIGATION
   "mobile number change kevi rite" → NAVIGATION

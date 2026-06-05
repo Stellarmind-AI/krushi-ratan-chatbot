@@ -247,3 +247,7 @@ app/schemas/full_schema.json
 # config/production.py
 # secrets/
 app/cache/query_cache.json
+
+# keyword dictionary - ignore auto-generated catalog, keep manual overrides
+data/
+!data/entity_catalog_manual.json

@@ -20,6 +20,7 @@ from app.core.database import init_database, close_database
 from app.core.logger import get_logger
 from app.utils.schema_generator import initialize_schemas
 from app.services.agent.orchestrator import initialize_orchestrator
+from app.services.knowledge_cache import knowledge_cache
 from app.websocket.chat_handler import get_chat_handler
 from app.models.chat_models import HealthCheckResponse
 from app.fake_detection_api import router as fake_router          # ← ADD
@@ -52,11 +53,24 @@ async def lifespan(app: FastAPI):
     logger.info("📁 Loading database schemas and tools...")
     schema_generator = initialize_schemas(
         schemas_dir=settings.SCHEMA_DIR,
-        tools_dir=settings.TOOLS_DIR
+        tools_dir=settings.TOOLS_DIR,
+        privacy_policy_path=settings.SCHEMA_PRIVACY_POLICY_PATH,
     )
 
     logger.info("🤖 Initializing AI agent orchestrator...")
     initialize_orchestrator(schema_generator)
+
+    # ── KnowledgeCache: load DB content (crops, K-Shop products, etc.) ──
+    # Only load if SQL is enabled — otherwise there's no DB connection.
+    if settings.is_sql_enabled:
+        logger.info("🧠 Initializing KnowledgeCache from database...")
+        try:
+            await knowledge_cache.load()
+            knowledge_cache.start_background_refresh()
+        except Exception as e:
+            logger.warning("KnowledgeCache initialization failed; continuing", error=str(e))
+    else:
+        logger.info("Skipping KnowledgeCache because ENABLE_SQL_FLOW=false")
 
     logger.info("=" * 60)
     logger.info("✅ Application started successfully!")
@@ -67,6 +81,7 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("🛑 Shutting down application...")
+    knowledge_cache.stop_background_refresh()
     await close_database()
     try:
         await close_fake_detection()                              # ← ADD

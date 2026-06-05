@@ -25,7 +25,10 @@ from app.models.chat_models import ChatHistory, ChatMessage
 from app.services.agent.orchestrator import get_orchestrator
 from app.services.language_processor import get_language_processor
 from app.services.translation_service import translate_to_user_language, translate_list_to_user_language
-from app.services.agent.confirmation_layer import get_confirmation_layer, ConfirmedIntent, _is_navigation_query
+from app.services.agent.confirmation_layer import (
+    get_confirmation_layer, ConfirmedIntent,
+    NAV_INTENT_KEY, build_navigation_query,
+)
 
 logger       = get_websocket_logger()
 pipeline_log = get_logger("pipeline")
@@ -135,18 +138,44 @@ class ChatHandler:
 
         original_query = pending["query"]
         lang_type      = pending["lang_type"]
+        keyword_hint   = pending.get("keyword_hint", "")
+        scenario       = pending.get("scenario", "")
 
+        # ── Navigation pick — route to NAVIGATION flow, not SQL ─────────────
+        # When the user taps the "How to ... in app" button, intent_key is
+        # NAV_INTENT_KEY. The original query (e.g. "tractor") is too vague
+        # for answer_navigation() — we substitute a complete how-to question
+        # built from scenario + keyword so the navigation LLM has clear context.
+        # force_navigation=True bypasses both F1 (already resolved) and the
+        # route agent, going straight to _flow_navigation in the orchestrator.
+        if intent_key == NAV_INTENT_KEY:
+            synthetic_q = build_navigation_query(scenario, keyword_hint)
+            logger.info(
+                "F1 NAVIGATION PICKED",
+                session_id=session_id,
+                scenario=scenario,
+                original_query=original_query[:60],
+                synthetic_query=synthetic_q[:80],
+            )
+            await self._run_pipeline(
+                ws,
+                synthetic_q,
+                session_id,
+                client_id,
+                confirmed_intent=None,
+                lang_type_override=lang_type,
+                keyword_hint="",
+                force_navigation=True,
+            )
+            return
+
+        # ── SQL intent pick — resume orchestrator with confirmed intent ─────
         logger.info(
             "F1 CLARIFICATION RESOLVED",
             session_id=session_id,
             intent_key=intent_key,
             original_query=original_query[:80],
         )
-
-        keyword_hint = pending.get("keyword_hint", "")
-
-        # Resume the pipeline — pass confirmed_intent and keyword_hint so
-        # orchestrator skips tool-selection and SQL is targeted to the keyword.
         await self._run_pipeline(
             ws,
             original_query,
@@ -176,6 +205,7 @@ class ChatHandler:
         confirmed_intent: Optional[str] = None,   # F1: set after user picks clarification option
         lang_type_override: Optional[str] = None, # F1: reuse detected lang from paused query
         keyword_hint: str = "",                   # F1: the matched keyword (e.g. "kapas") for SQL accuracy
+        force_navigation: bool = False,           # F1: set when user picked the "navigation" button
     ):
         """
         Full pipeline:
@@ -211,18 +241,32 @@ class ChatHandler:
         #   ClarificationRequest → confidence < 80%, pause and ask user
         #   None                 → no ambiguity, proceed normally
         _sql_enabled = settings.is_sql_enabled
+        # F1 is now ENTITY-EXTRACTION ONLY. Flow decisions are made by the
+        # route agent (single source of truth). F1 returns:
+        #   - ConfirmedIntent → entity hint; route agent still decides flow
+        #   - ClarificationRequest → ambiguous; pause and show buttons
+        #   - None → no entity detected; route agent decides everything
         if not confirmed_intent and _sql_enabled:
-            f1_result = self.confirmation_layer.check(processed_text)
+            f1_result = await self.confirmation_layer.check(processed_text)
 
             if isinstance(f1_result, ConfirmedIntent):
-                # High-confidence intent — skip F1 UI, inject directly into pipeline
+                # F1 extracted a clear entity — pass to orchestrator as hint
+                # so the route agent + entity normalizer have context.
                 logger.info(
-                    "F1 HIGH CONFIDENCE",
+                    "F1 ENTITY DETECTED",
                     intent=f1_result.intent_key,
                     confidence=f"{f1_result.confidence:.0%}",
+                    keyword=f1_result.keyword,
                     session_id=session_id,
                 )
                 confirmed_intent = f1_result.intent_key
+                # Carry the F1-extracted keyword forward so the orchestrator's
+                # entity normalizer can resolve it to canonical Gujarati and the
+                # SQL prompt can inject the CANONICAL / TRANSLATE KEYWORD block.
+                # Without this assignment keyword_hint stays at its default ""
+                # and the entire normalization path short-circuits.
+                if f1_result.keyword:
+                    keyword_hint = f1_result.keyword
 
             elif f1_result is not None:
                 # Low-confidence — pipeline paused, ask user
@@ -231,6 +275,7 @@ class ChatHandler:
                     "query":          processed_text,
                     "lang_type":      lang_type,
                     "keyword_hint":   clarification.matched_keyword,
+                    "scenario":       clarification.scenario,
                 }
                 logger.info(
                     "F1 PIPELINE PAUSED",
@@ -252,18 +297,14 @@ class ChatHandler:
                 await ws.send_text(json.dumps(payload, ensure_ascii=False))
                 return  # ← pipeline paused; resumes via _handle_clarification_response
 
-        # ── Detect navigation signal for route override ────────────────────
-        # F1 nav bypass catches navigation patterns (કેવી રીતે, પગલાં, steps, etc.)
-        # but only prevents F1 from injecting confirmed_intent — it does NOT
-        # tell the route agent anything. The route agent can still mis-classify
-        # as SQL (e.g. "મારા ઓર્ડર ક્યાં છે?" sounds like order data lookup).
-        # Fix: when F1 detects nav signals, force NAVIGATION flow in orchestrator.
-        force_navigation = False
-        if not confirmed_intent:
-            q_check = processed_text.lower() + " " + processed_text
-            if _is_navigation_query(q_check):
-                force_navigation = True
-                print(f"  🧭 NAV SIGNAL DETECTED — will force NAVIGATION flow", flush=True)
+        # ── Navigation routing ───────────────────────────────────────────────
+        # The LLM-based F1 (confirmation_layer) already returns None (skip) for
+        # all navigation queries — the route agent then classifies them correctly
+        # as NAVIGATION without any keyword override needed here.
+        # The exception is the "navigation" clarification button: when the user
+        # taps it, _handle_clarification_response calls _run_pipeline with
+        # force_navigation=True, which is honored by passing it through to the
+        # orchestrator below.
 
         # ── Step 2: Orchestrator → English answer ────────────────────────────
         with Timer() as t:
@@ -292,21 +333,31 @@ class ChatHandler:
         history.messages.append(ChatMessage(role="assistant", content=final_answer))
         history.updated_at = datetime.now()
 
-        kshop_payload = self._build_kshop_payload(result)
+        # Frontend contract: a single `query_data` field carrying the
+        # post-status-filter rows (what the LLM saw and what's safe to
+        # render).  When the status-filter step didn't run — non-SQL
+        # flows (NAVIGATION/GENERAL/GREETING) and SQL fast-paths
+        # (no-data / not-found / sql-disabled) — `query_results_filtered`
+        # is absent from the orchestrator result; we fall back to the raw
+        # `query_results` so `query_data` is always the canonical view.
+        # `query_data_filtered` was the old dual-shipping field — removed
+        # so the wire format stays single-shape across all flows.
+        query_data = self._build_query_data(result, key="query_results_filtered")
+        if not query_data:
+            query_data = self._build_query_data(result, key="query_results")
 
         try:
             text_msg = {
-                "type":        "text_output",
-                "text":        final_answer,
-                "is_complete": True,
-                "sources":     _safe_serialize(result.get("sources", [])),
-                "flow":        result.get("flow", "SQL"),
-                "lang_type":   lang_type,
-                "cache_hit":   result.get("cache_hit", False),
-                "timestamp":   datetime.now().isoformat(),
+                "type":                "text_output",
+                "text":                final_answer,
+                "is_complete":         True,
+                "sources":             _safe_serialize(result.get("sources", [])),
+                "flow":                result.get("flow", "SQL"),
+                "lang_type":           lang_type,
+                "cache_hit":           result.get("cache_hit", False),
+                "timestamp":           datetime.now().isoformat(),
+                "query_data":          _safe_serialize(query_data),
             }
-            if kshop_payload:
-                text_msg["kshop_data"] = _safe_serialize(kshop_payload)
             await ws.send_text(json.dumps(text_msg, ensure_ascii=False))
         except Exception as e:
             logger.error_with_context(e, {"action": "send_text_output"})
@@ -315,33 +366,33 @@ class ChatHandler:
                 "is_complete": True, "timestamp": datetime.now().isoformat()
             }, ensure_ascii=False))
 
-        if kshop_payload:
-            try:
-                await ws.send_text(json.dumps({
-                    "type": "kshop_products", "button_type": "product_view",
-                    "products": _safe_serialize(kshop_payload), "count": len(kshop_payload),
-                    "timestamp": datetime.now().isoformat(),
-                }, ensure_ascii=False))
-            except Exception as e:
-                logger.warning(f"kshop_products send failed: {e}")
-
         total_ms = (time.perf_counter() - pipeline_start) * 1000
         logger.info("PIPELINE COMPLETE", total_ms=f"{total_ms:.0f}ms",
                     flow=result.get("flow"), lang_type=lang_type,
                     cached=result.get("cache_hit", False))
 
     @staticmethod
-    def _build_kshop_payload(result: dict) -> list:
-        products = []
-        for qr in result.get("query_results", []):
+    def _build_query_data(result: dict, key: str = "query_results_filtered") -> dict:
+        """
+        Build a structured dict of DB rows keyed by table name.
+
+        key  — which result list to read from the orchestrator result dict:
+                "query_results_filtered" (default) -> rows after status filter
+                                                       (what LLM saw — canonical
+                                                       view shipped to frontend)
+                "query_results"                    -> raw rows (all statuses);
+                                                       used as fallback for flows
+                                                       that don't run the filter
+
+        Returns {} for NAVIGATION / GENERAL / GREETING flows (no DB query runs).
+        """
+        query_data = {}
+        for qr in result.get(key, []):
             table = getattr(qr, "table_name", None) or (qr.get("table_name") if isinstance(qr, dict) else None) or ""
             rows  = getattr(qr, "rows", None) or (qr.get("rows") if isinstance(qr, dict) else None) or []
-            if "kshop" in table.lower():
-                for row in rows:
-                    p = dict(row) if isinstance(row, dict) else {}
-                    p["button_type"] = "product_view"
-                    products.append(p)
-        return products
+            if table and rows:
+                query_data[table] = [dict(row) if isinstance(row, dict) else row for row in rows]
+        return query_data
 
     @staticmethod
     async def _send_error(ws: WebSocket, error: str):

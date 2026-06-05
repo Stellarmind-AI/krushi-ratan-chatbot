@@ -26,7 +26,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 
 from app.core.logger import get_logger, Timer
@@ -42,34 +42,308 @@ _CACHE_DIR  = Path("app/cache")
 _CACHE_FILE = _CACHE_DIR / "query_cache.json"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Intent / filler words to strip before building the cache key.
-# These words express HOW the user wants something, not WHAT they want.
-# Stripping them means "balwan weeder joiyu" and "balwan weeder apo"
-# both resolve to the same normalized key: "balwan weeder"
+# Filler/intent word detection — REGEX-FIRST design.
+#
+# Why not a flat set: a flat set misses every inflection and typo it wasn't
+# hand-entered for.  "any" vs "some", "product" vs "products", "waht" vs
+# "what" — each new variant required a manual edit, and a single miss (like
+# "any" in "how i sell any product") caused the exploratory-query detector to
+# treat filler as a search keyword.
+#
+# New design — two layers of defense:
+#   1. REGEX LAYER — semantic root groups × inflection-suffix pattern.
+#      One root "sell" auto-matches sell/sells/selling/seller/sellers.
+#      One root "product" auto-matches product/products.
+#   2. FUZZY LAYER — difflib close-match against the same roots (cutoff 0.85).
+#      Catches typos: prodct→product, sellr→seller, waht→what.
+#
+# Both layers feed a single `is_filler_token()` predicate so the orchestrator
+# and the cache normalizer share one source of truth.
+#
+# To extend: add roots to the relevant semantic group below — that's it.
+# No need to enumerate every inflection or typo manually.
 # ─────────────────────────────────────────────────────────────────────────────
-_STRIP_WORDS = {
-    # Gujarati intent/filler
-    "mare", "maro", "mari", "mara", "mane",
-    "karvu", "karvani", "karvo", "karu", "karshu",
-    "che", "chhe", "hatu", "hati", "hashe",
-    "joiyu", "joiye", "jovu", "joi", "juo",
-    "levu", "levo", "levi", "lidhu", "laao",
-    "kharidi", "kharido", "vechan", "vecho",
-    "thi", "ma", "no", "ni", "na", "nu", "ne", "ane",
-    "apo", "apso", "batao", "batavo", "batavsho",
-    "pan", "pani", "ne", "kem", "shu",
-    # Hindi intent/filler
-    "mujhe", "mera", "mere", "meri", "hain", "hai",
-    "karo", "karna", "chahiye", "dijiye", "batao",
-    "ka", "ki", "ke", "ko", "se", "mein",
-    # English intent/filler
-    "please", "pls", "i", "want", "show", "me", "tell",
-    "get", "find", "give", "fetch", "list", "display",
-    "what", "is", "are", "the", "a", "an",
-    "of", "in", "at", "for", "to", "my", "about",
-    "purchase", "buy", "from", "kshop",
-    "can", "you", "could", "would", "help",
+
+# Semantic root groups — English/romanized tokens only.
+# Gujarati-script fillers use a separate set (Gujarati morphology differs).
+#
+# Each group declares:
+#   inflect: True  → suffix pattern is applied (verbs, common nouns)
+#   inflect: False → exact match only (grammatical primitives, Indic tokens)
+#
+# Why inflect is a per-group choice:
+#   Applying English suffixes to grammatical primitives (prepositions, articles,
+#   pronouns, conjunctions) creates catastrophic false-positives against real
+#   content words.  Example: if "on" (PREP) + "ion" (suffix) both match, the
+#   pattern \bon(?:ion)?\b also matches "ONION" — a real crop.  Similarly:
+#     - "an" + "ion" → "anion"
+#     - "to" + "es"  → "toes"
+#     - "on" + "ly"  → "only" (benign here, but illustrates the class)
+#   Grammatical primitives are atomic — they don't inflect — so their regex
+#   must be exact match.  Suffix inflection is restricted to VERBS and NOUNS.
+_ROOTS_BY_GROUP: Dict[str, Dict[str, object]] = {
+    "QUESTION": {"inflect": False, "roots": {
+        "how", "what", "where", "when", "why", "which", "who", "whose", "whom",
+    }},
+    "INTENT_VERB": {"inflect": True, "roots": {
+        "sell", "buy", "purchase", "get", "find", "show", "tell", "give",
+        "want", "need", "like", "help", "fetch", "display", "list", "explain",
+        "describe", "know", "mean", "understand", "say", "ask", "look",
+    }},
+    "DETERMINER": {"inflect": False, "roots": {
+        # Quantifiers/determiners — never search keywords on their own.
+        "any", "some", "all", "every", "each", "no", "none", "another", "other",
+        "few", "many", "much", "several", "both", "either", "neither",
+        "this", "that", "these", "those",
+    }},
+    "ARTICLE": {"inflect": False, "roots": {"a", "an", "the"}},
+    "PRONOUN": {"inflect": False, "roots": {
+        "i", "me", "my", "mine", "myself",
+        "you", "your", "yours", "yourself",
+        "he", "him", "his", "himself",
+        "she", "her", "hers", "herself",
+        "it", "its", "itself",
+        "we", "us", "our", "ours", "ourselves",
+        "they", "them", "their", "theirs", "themselves",
+    }},
+    "AUX": {"inflect": False, "roots": {
+        "is", "are", "was", "were", "be", "been", "being", "am",
+        "have", "has", "had", "having",
+        "do", "does", "did", "doing", "done",
+        "can", "could", "will", "would", "shall", "should", "may", "might", "must",
+    }},
+    "PREP": {"inflect": False, "roots": {
+        "in", "on", "at", "of", "for", "to", "from", "with", "by",
+        "about", "into", "onto", "upon", "under", "over", "between",
+        "through", "during", "before", "after", "above", "below",
+    }},
+    "CONJ": {"inflect": False, "roots": {
+        "and", "or", "but", "so", "if", "then", "than", "as",
+        "because", "while", "although", "though",
+    }},
+    "POLITE": {"inflect": False, "roots": {"please", "pls", "kindly", "thanks", "thank"}},
+    # Category/browse nouns — app domain words that are NEVER specific items.
+    # (Absorbs what used to live in knowledge_cache.BROWSE_KEYWORDS.)
+    "CATEGORY": {"inflect": True, "roots": {
+        "product", "item", "crop", "seed", "video", "news",
+        "price", "bhav", "rate", "category", "yard", "mandi",
+        "order", "listing", "post", "thing", "stuff",
+        "samachar", "khabar", "kshop",
+    }},
+    # Romanized Gujarati / Hindi intent/filler.
+    # Indic morphology doesn't follow English suffix rules (maro/mari/mara are
+    # gender-inflections, not suffix-inflections), so exact match only.
+    "INDIC_ROMAN": {"inflect": False, "roots": {
+        "mare", "maro", "mari", "mara", "mane",
+        "karvu", "karvani", "karvo", "karu", "karshu", "karva",
+        "che", "chhe", "hatu", "hati", "hashe",
+        "joiyu", "joiye", "jovu", "joi", "juo",
+        "levu", "levo", "levi", "lidhu", "laao",
+        "kharidi", "kharido", "vechan", "vecho",
+        "thi", "ma", "ni", "nu", "ne", "ane", "na",
+        "apo", "apso", "batao", "batavo", "batavsho",
+        "pan", "pani", "kem", "shu", "kevi", "rite",
+        "mujhe", "mera", "mere", "meri", "hain", "hai",
+        "karo", "karna", "chahiye", "dijiye",
+        "ka", "ki", "ke", "ko", "se", "mein",
+    }},
 }
+
+# Derive root collections from the group declarations
+_INFLECTABLE_ROOTS: Set[str] = set()
+_FIXED_ROOTS:       Set[str] = set()
+for _spec in _ROOTS_BY_GROUP.values():
+    _bucket = _INFLECTABLE_ROOTS if _spec["inflect"] else _FIXED_ROOTS
+    _bucket |= _spec["roots"]  # type: ignore[operator]
+
+# Flat union — used for fuzzy-match pool and STRIP_WORDS materialization.
+_ALL_ROOTS: Set[str] = _INFLECTABLE_ROOTS | _FIXED_ROOTS
+
+# Inflection-suffix pattern — ONLY applied to inflectable roots (verbs, nouns).
+# Irregular verbs (go/went, sell/sold) aren't covered by suffix patterns;
+# if an irregular becomes relevant, add it as its own root.
+_INFLECTION = r"(?:s|es|ed|ing|er|ers|est|ly|ion|ions|ive|al|ies|y)?"
+
+# Compile master filler regex as TWO alternations (critical correctness point):
+#   1. Inflectable roots + suffix  — "sell", "selling", "product", "products"
+#   2. Fixed roots, exact match    — "on", "an", "the", "i", "any"
+#
+# Longer roots first inside each alternation so e.g. "product" beats "pro".
+# The fixed-group alternation has NO trailing suffix pattern, which prevents
+# "on" + "ion" from ever matching "onion".
+def _alt(roots: Set[str]) -> str:
+    return "|".join(re.escape(r) for r in sorted(roots, key=len, reverse=True))
+
+_FILLER_RE = re.compile(
+    r"\b(?:"
+    + r"(?:" + _alt(_INFLECTABLE_ROOTS) + r")" + _INFLECTION
+    + r"|"
+    + r"(?:" + _alt(_FIXED_ROOTS) + r")"
+    + r")\b",
+    re.IGNORECASE,
+)
+
+# Gujarati-script fillers — exact match (Gujarati morphology varies per root).
+_GUJARATI_FILLERS: Set[str] = {
+    # Question/intent
+    "કેવી", "રીતે", "કેમ", "શું", "કયા", "કયું", "કોણ", "ક્યાં",
+    # Pronouns/possessives
+    "મારે", "મારો", "મારી", "મને", "અમારે", "અમને", "તમે", "તમારું",
+    # Be/aux
+    "છે", "છો", "હશે", "હતો", "હતી",
+    # Modal/volition
+    "જોઈએ", "જોવું", "લેવું", "લઈ", "આપો", "બતાવો", "કહો",
+    # Determiner/quantifier
+    "કોઈ", "કેટલા", "કેટલું", "બધા", "આ", "તે", "કોઈપણ",
+    # Category nouns
+    "બીજ", "ઉત્પાદ", "વસ્તુ", "પાક", "વિડિઓ", "ભાવ",
+    "સમાચાર", "શ્રેણી", "યાર્ડ", "મંડી", "ઓર્ડર",
+}
+_GUJARATI_FILLER_RE = re.compile("|".join(re.escape(w) for w in _GUJARATI_FILLERS))
+
+# Fuzzy-match typo tolerance.
+#
+# Two independent thresholds (separating them is critical for correctness):
+#
+#   _FUZZY_TOKEN_MIN_LEN = 4
+#     Minimum length of the USER TOKEN to be eligible for fuzzy checking.
+#     Short tokens (≤3 chars) have too-high collision rates under edit distance.
+#
+#   _FUZZY_ROOT_MIN_LEN  = 5
+#     Minimum length of ROOTS admitted to the fuzzy pool.  Short roots like
+#     "what", "find", "show" (4 chars) are dangerously close to real content
+#     words — "wheat" is 1 edit from "what" and would be wrongly filtered.
+#     The exact-match regex already covers short roots; fuzzy adds no value
+#     for them but creates collisions.
+#
+# Cutoff 0.85 → "prodct" matches "product" (ratio 0.92) but "kapas" does NOT
+# match "papas"/"paras"/etc.  With _FUZZY_ROOT_MIN_LEN=5, there's no 4-char
+# root left to collide with "wheat", "bean", "toes", etc.
+import difflib
+
+_FUZZY_CUTOFF        = 0.85
+_FUZZY_TOKEN_MIN_LEN = 4
+_FUZZY_ROOT_MIN_LEN  = 5
+_FUZZY_POOL = [r for r in _ALL_ROOTS if len(r) >= _FUZZY_ROOT_MIN_LEN]
+
+# Category-prefix layer — catches truncated category fragments that fuzzy
+# misses because difflib's character-set ratio falls below 0.85 when the
+# fragment is much shorter than the root (e.g. "prod" vs "product" → 0.73).
+#
+# Real-world hits this closes:
+#   "tell me about prod"   → "prod" is a fragment of "product"   → filler
+#   "show vide"            → "vide" is a fragment of "video"     → filler
+#   "give me cate list"    → "cate" is a fragment of "category"  → filler
+#   "any orde"             → "orde" is a fragment of "order"     → filler
+#
+# Constraints to avoid false positives on real keywords:
+#   1. Only INFLECTABLE CATEGORY roots are eligible — these are app-domain
+#      browse words that are NEVER specific items.  Roots from other groups
+#      (verbs/prepositions/etc.) are already covered by exact + suffix regex.
+#   2. Roots must be ≥5 chars so a ≥4-char prefix is unambiguous.  Shorter
+#      roots like "crop", "seed", "yard" are already filler via exact match.
+#   3. Token must be ≥4 chars AND strictly shorter than the root.
+#
+# Verified non-collisions against real keywords used in the app:
+#   "kapas", "motor", "weeder", "balwan", "tractor", "thresher", "wheat",
+#   "ghau", "bajra", "magfali", "onion", "tomato" — none are prefixes of
+#   any CATEGORY root in this set.
+_CATEGORY_PREFIX_MIN_LEN  = 4
+_CATEGORY_PREFIX_ROOT_MIN = 5
+_CATEGORY_PREFIX_ROOTS: Set[str] = {
+    r for r in _ROOTS_BY_GROUP["CATEGORY"]["roots"]   # type: ignore[index,union-attr]
+    if len(r) >= _CATEGORY_PREFIX_ROOT_MIN
+}
+
+
+def is_filler_token(token: str) -> bool:
+    """
+    True if the token is a filler/intent/category word.
+
+    Layers (cheapest first; first hit wins):
+      - Regex layer: roots + common inflection (s/es/ing/ed/er/ly/...).
+      - Gujarati-script tokens: exact match against the Gujarati filler set.
+      - Category-prefix layer: token is a ≥4-char prefix of an inflectable
+        CATEGORY root ≥5 chars (e.g. "prod" → "product"). Catches user
+        truncations the fuzzy layer misses.
+      - Fuzzy layer: edit-distance tolerance for tokens ≥4 chars (typo safety).
+
+    Used by:
+      - Cache-key normalization (every token filtered individually)
+      - Orchestrator exploratory-query detection
+    """
+    if not token:
+        return True
+    t = token.lower().strip()
+    if len(t) <= 1:
+        return True
+    # Regex layer — handles English + romanized Indic inflections
+    if _FILLER_RE.fullmatch(t):
+        return True
+    # Gujarati script exact-match
+    if t in _GUJARATI_FILLERS:
+        return True
+    # Category-prefix layer — handles truncated browse words
+    if len(t) >= _CATEGORY_PREFIX_MIN_LEN:
+        for root in _CATEGORY_PREFIX_ROOTS:
+            if len(t) < len(root) and root.startswith(t):
+                return True
+    # Fuzzy layer — typo tolerance (regex didn't match; is this a typo?)
+    if len(t) >= _FUZZY_TOKEN_MIN_LEN:
+        if difflib.get_close_matches(t, _FUZZY_POOL, n=1, cutoff=_FUZZY_CUTOFF):
+            return True
+    return False
+
+
+def strip_fillers(query: str) -> List[str]:
+    """
+    Return the list of tokens surviving filler removal — potentially searchable
+    keywords.  Empty list means the query contains no search targets
+    (it's exploratory).
+
+    Pipeline:
+      1. Run regex substitutions (English + Gujarati)
+      2. Tokenize, drop 1-char fragments
+      3. Fuzzy pass to catch typos the regex missed
+    """
+    if not query:
+        return []
+    q = query.lower()
+    q = _FILLER_RE.sub(" ", q)
+    q = _GUJARATI_FILLER_RE.sub(" ", q)
+    # Remove punctuation but keep Devanagari (ऀ-ॿ) and Gujarati (઀-૿)
+    q = re.sub(r"[^\w\sऀ-ॿ઀-૿]", " ", q)
+    tokens = [t for t in q.split() if len(t) > 1]
+    # Fuzzy second pass — regex didn't match these, but they may be typos
+    return [t for t in tokens if not is_filler_token(t)]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Backward-compat: STRIP_WORDS is still exported as a flat set.
+#
+# Built by expanding every root with its common inflections.  The cache-key
+# normalizer does `if w not in _STRIP_WORDS` (exact-match semantics) so we
+# materialize the regex's language as an explicit set here.
+# ─────────────────────────────────────────────────────────────────────────────
+def _expand_root(root: str) -> Set[str]:
+    """Generate the set of inflected forms for a root (conservative)."""
+    forms = {root}
+    # Add common English inflections — keep it modest to avoid bogus words
+    for sfx in ("s", "es", "ed", "ing", "er", "ers", "ly", "ies"):
+        forms.add(root + sfx)
+    # -y → -ies (categories→category is handled the other direction elsewhere)
+    if root.endswith("y") and len(root) > 2:
+        forms.add(root[:-1] + "ies")
+    return forms
+
+STRIP_WORDS: Set[str] = set()
+for _r in _ALL_ROOTS:
+    STRIP_WORDS |= _expand_root(_r)
+# Also keep Gujarati-script fillers in the flat set for cache normalization
+STRIP_WORDS |= _GUJARATI_FILLERS
+
+# Internal alias kept so existing code in this file still works
+_STRIP_WORDS = STRIP_WORDS
 
 
 @dataclass

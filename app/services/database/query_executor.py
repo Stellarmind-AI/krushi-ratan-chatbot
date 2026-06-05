@@ -10,6 +10,8 @@ from app.core.database import db_manager
 from app.services.database.query_validator import query_validator
 from app.models.chat_models import QueryResult
 from app.core.logger import get_database_logger
+from app.utils.privacy_policy import get_privacy_policy
+from app.utils.image_url_resolver import resolve_images_in_rows
 
 logger = get_database_logger()
 
@@ -74,20 +76,30 @@ class QueryExecutor:
             
             execution_time = time.time() - start_time
             
-            # Convert results to list of dicts (if not already)
-            rows = list(results) if results else []
+            # Convert results to list of dicts, then sanitize before logs,
+            # answer generation, or API responses can see them.
+            raw_rows = list(results) if results else []
+            rows = get_privacy_policy().sanitize_rows(raw_rows)
 
-            # 🔥 NEW — Log actual DB result payload (LLM input data)
+            # Rewrite image-name fields into full S3 URLs.  Single transform
+            # site so the LLM context, status filter, cache replay, and
+            # frontend WebSocket payload all see URLs — never raw filenames.
+            #
+            # We pass `clean_sql` so the resolver can parse it and determine
+            # each column's REAL source table (not the LLM-chosen alias).
+            # Without this, an alias like `subcategory_img` (LLM's choice)
+            # cannot be mapped to the `sub_categories` folder because the
+            # alias prefix `subcategory` is not the real table name.
+            rows = resolve_images_in_rows(rows, sql=clean_sql)
+
+            # Log only safe metadata, never raw DB payload values.
             try:
-                preview_rows = rows[:5]  # limit preview for safety
-                
                 logger.info(
-                    "🧠 DB RESULT PAYLOAD",
+                    "DB RESULT METADATA",
                     extra={
                         "table": table_name,
                         "row_count": len(rows),
                         "execution_time": round(execution_time, 3),
-                        "preview": preview_rows,
                         "columns": list(rows[0].keys()) if rows else [],
                     }
                 )

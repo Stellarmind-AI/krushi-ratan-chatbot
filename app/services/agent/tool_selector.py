@@ -15,39 +15,29 @@ logger = get_agent_logger()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FK DEPENDENCY CHAINS
-# When you pick a table, you MUST also pick these tables for JOINs.
-# Built from the real tool files.
+# Derived at startup from each tool JSON's `relationships` field.
+# Orchestrator calls set_fk_deps() after loading tools.
+# Source of truth: app/schemas/tools/*.json
 # ══════════════════════════════════════════════════════════════════════════════
-FK_DEPS: Dict[str, List[str]] = {
-    "kshop_products":         ["kshop_companies", "kshop_categories", "kshop_weights"],
-    "kshop_orders":           ["kshop_products", "kshop_companies", "kshop_categories", "order_statuses", "users"],
-    "kshop_category_company": ["kshop_companies", "kshop_categories"],
-    "buy_sell_products":      ["buy_sell_categories", "users"],
-    "buy_sell_orders":        ["buy_sell_products", "users"],
-    "buy_sell_category_fields": ["buy_sell_categories"],
-    "buy_sell_category_steps":  ["buy_sell_categories"],
-    "products":               ["sub_categories", "yards", "weights"],
-    "yards":                  ["cities", "states", "talukas"],
-    "cities":                 ["states"],
-    "talukas":                ["cities"],
-    "news":                   ["cities", "states", "talukas"],
-    "seeds":                  ["sub_categories"],
-    "sub_categories":         ["categories"],
-    "farmer_orders":          ["users", "kshop_companies", "sub_categories", "weights", "order_statuses"],
-    "company_orders":         ["farmer_orders", "users", "sub_categories", "weights", "order_statuses"],
-    "video_posts":            ["users", "video_categories"],
-    "video_comments":         ["video_posts", "users"],
-    "video_likes":            ["video_posts", "users"],
-    "video_saves":            ["video_posts", "users"],
-    "video_shares":           ["video_posts", "users"],
-    "video_views":            ["video_posts", "users"],
-    "video_comment_likes":    ["video_comments", "users"],
-    "user_products":          ["sub_categories", "users"],
-    "user_subcategories":     ["sub_categories", "users"],
-    "user_talukas":           ["users", "talukas"],
-    "user_video_categories":  ["users", "video_categories"],
-    "users":                  ["states", "cities"],
-}
+def build_fk_deps_from_tools(tools: Dict[str, Dict[str, Any]]) -> Dict[str, List[str]]:
+    """
+    Compute direct FK dependency map from loaded tool JSON files.
+    For each table, lists the referenced tables (deduped, order preserved)
+    from its `relationships` field. Self-references are kept.
+    """
+    deps: Dict[str, List[str]] = {}
+    for tname, tool in (tools or {}).items():
+        refs: List[str] = []
+        for rel in tool.get("relationships", []):
+            ref = rel.get("references", "")
+            if not ref or "." not in ref:
+                continue
+            ref_table = ref.split(".", 1)[0]
+            if ref_table and ref_table not in refs:
+                refs.append(ref_table)
+        if refs:
+            deps[tname] = refs
+    return deps
 
 # Intent words to strip when doing keyword-based topic detection
 INTENT_WORDS = {
@@ -63,16 +53,6 @@ INTENT_WORDS = {
     "i", "want", "show", "me", "tell", "get", "find", "give",
 }
 
-# Source-specific keywords — when user mentions these, go directly to that source
-SOURCE_KEYWORDS = {
-    "kshop":     ["kshop", "k-shop", "k shop"],
-    "buy_sell":  ["buy sell", "buysell", "buy/sell", "marketplace"],
-    "video":     ["video", "watch", "creator"],
-    "news":      ["news", "samachar", "update"],
-    "price":     ["price", "bhav", "ભાવ", "rate", "mandi", "yard", "yard price"],
-    "order":     ["order", "orders", "purchase history", "my order"],
-    "user":      ["user", "farmer", "profile", "account"],
-}
 
 
 class ToolSelector:
@@ -80,6 +60,15 @@ class ToolSelector:
 
     def __init__(self):
         self.llm_manager = get_llm_manager()
+        # Populated by orchestrator at startup via set_fk_deps() once tool
+        # JSON files are loaded. Empty until then — selection still works,
+        # just without FK dependency auto-expansion.
+        self.fk_deps: Dict[str, List[str]] = {}
+
+    def set_fk_deps(self, fk_deps: Dict[str, List[str]]) -> None:
+        """Install the FK dependency map (built from tool JSON relationships)."""
+        self.fk_deps = dict(fk_deps or {})
+        logger.info(f"🔗 FK deps installed for {len(self.fk_deps)} tables")
 
     async def select_tools(
         self,
@@ -122,7 +111,7 @@ class ToolSelector:
 
         # Format FK dependency chains for the prompt
         dep_lines = []
-        for table, deps in FK_DEPS.items():
+        for table, deps in self.fk_deps.items():
             tool_name = f"query_{table}"
             if tool_name in available_tools:
                 dep_str = ", ".join(f"query_{d}" for d in deps if f"query_{d}" in available_tools)
@@ -162,11 +151,20 @@ SELECTION RULES
 5. Source-specific rules:
    - User says "kshop" → query_kshop_products + its dependencies
    - User says "buy sell" → query_buy_sell_products + its dependencies
-   - User asks about price/bhav/mandi → query_products + query_sub_categories + query_yards + query_cities
+   - User asks about price/bhav/mandi/cost/₹/rupees → query_products + query_sub_categories + query_yards + query_cities + query_talukas (NEVER query_news)
    - General product/equipment query (no source) → BOTH query_kshop_products AND query_buy_sell_products + their deps
    - Video query → query_video_posts + its dependencies
-   - News query → query_news + its dependencies
-5. Return ONLY a JSON array of tool names
+   - News query → query_news + its dependencies ONLY when user asks "what's the news", "latest news", "samachar", "khabar" — NEVER for price/availability questions
+
+6. CRITICAL — "PRICE OF X" IS ALWAYS A PRODUCT QUERY, NEVER NEWS:
+   - "What is the price of X?" → X is a product/crop, NOT a news article
+   - "How much does X cost?" → X is a product, NOT news
+   - Even if X sounds like a news title (e.g. "Fertilizer Update"), the words "price", "cost",
+     "bhav", "કિંમત", "ભાવ", "₹" mean the user wants product data from kshop_products or products table
+   - The news table has NO price column — it's impossible to get a price from news
+   - If you see ANY price indicator + unknown noun → use query_kshop_products + query_products, NEVER query_news
+
+7. Return ONLY a JSON array of tool names
 
 OUTPUT: Return ONLY a JSON array. Example:
 ["query_kshop_products", "query_kshop_companies", "query_kshop_categories", "query_kshop_weights"]
@@ -206,7 +204,7 @@ Return ONLY the JSON array."""
             expanded = list(validated)
             for tool in validated:
                 table = tool.replace("query_", "")
-                for dep_table in FK_DEPS.get(table, []):
+                for dep_table in self.fk_deps.get(table, []):
                     dep_tool = f"query_{dep_table}"
                     if dep_tool in available_set and dep_tool not in expanded:
                         expanded.append(dep_tool)

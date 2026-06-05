@@ -10,7 +10,14 @@
         "what is",
         "about",
         "shu che",
-        "app vishe"
+        "app vishe",
+        "कृषि रत्न क्या है",
+        "एप क्या है",
+        "क्रुषि रत्न क्या है",
+        "कृषि रत्न के बारे में",
+        "एप के बारे में",
+        "krushi ratn kya hai",
+        "app kya hai"
       ],
       "question": "What is Krushi Ratn?",
       "answer": "Krushi Ratn is a free digital agricultural marketplace app designed for farmers in Gujarat. It provides: (1) Mandi Bhav — real-time crop market prices from yards across Gujarat; (2) K-Shop — buy agricultural equipment, seeds, fertilizers from verified companies; (3) Buy/Sell Marketplace — trade animals, equipment, and produce directly with other farmers; (4) Farming Videos — educational content from agricultural experts; (5) Agricultural News — latest news, government schemes, and weather alerts; (6) AI Chatbot — ask any farming or app-related question in Gujarati or English."
@@ -23,7 +30,16 @@
         "signup",
         "new user",
         "join",
-        "register kevi rite"
+        "register kevi rite",
+        "रजिस्टर कैसे करें",
+        "रजिस्टर नहीं हो रहा",
+        "अकाउंट कैसे बनाएं",
+        "नया अकाउंट",
+        "साइन अप",
+        "नया उपयोगकर्ता",
+        "register nahi ho raha",
+        "account kaise banaye",
+        "naya account"
       ],
       "question": "How do I register or create an account?",
       "answer": "To register: Open the app → tap 'Register' → enter your mobile number → receive an OTP on SMS → enter the OTP → fill in your name, village, district, and state → tap 'Create Account'. Registration is free and takes less than 2 minutes. No email address is needed — only your mobile number."
@@ -35,7 +51,24 @@
         "sign in",
         "forgot password",
         "otp",
-        "login problem"
+        "login problem",
+        "ओटीपी नहीं मिला",
+        "ओटीपी नहीं आया",
+        "मुझे ओटीपी नहीं मिला",
+        "ओटीपी क्या है",
+        "ओटीपी कैसे काम करता है",
+        "लॉगिन नहीं हो रहा",
+        "लॉगिन क्या है",
+        "लॉगिन कैसे करें",
+        "पासवर्ड भूल गया",
+        "पासवर्ड रीसेट",
+        "अकाउंट नहीं बन रहा",
+        "साइन इन",
+        "otp nahi mila",
+        "otp nahi aaya",
+        "login nahi ho raha",
+        "password bhul gaya",
+        "account nahi bana"
       ],
       "question": "How do I log in to the app?",
       "answer": "Login uses OTP (no password needed). Open app → tap 'Login' → enter your registered mobile number → tap 'Send OTP' → enter the 6-digit OTP received by SMS → tap 'Verify'. You are now logged in. If you did not receive OTP, tap 'Resend OTP' after 60 seconds."
@@ -51,7 +84,7 @@
         "kshop thi kharidi"
       ],
       "question": "How do I buy a product from K-Shop?",
-      "answer": "To buy from K-Shop: 1. Go to K-Shop tab. 2. Browse or search for the product. 3. Tap the product to see details and price. 4. Tap 'Add to Cart'. 5. Go to Cart (top right icon). 6. Review your order and tap 'Proceed to Checkout'. 7. Enter your delivery address. 8. Select payment method (UPI, net banking, cash on delivery). 9. Tap 'Place Order'. You will receive an order confirmation and can track delivery in Profile → My Orders."
+      "answer": "To buy from K-Shop: 1. Go to K-Shop tab. 2. Browse or search for the product. 3. Tap the product to see details and price. 4. Tap 'Add to Cart'. 5. Go to Cart (top right icon). 6. Review your order and tap 'Proceed to Checkout'. 7. Enter your delivery address. 8. Select Cash on Delivery as payment method. 9. Tap 'Place Order'. You will receive an order confirmation. Your order will be delivered to your address and you pay in cash to the delivery person."
     },
     {
       "id": "gq_005",
@@ -175,7 +208,16 @@
         "subscription",
         "charge",
         "paise",
-        "muft"
+        "muft",
+        "एप फ्री है",
+        "एप फ्री है क्या",
+        "कोई चार्ज है",
+        "मुफ्त है",
+        "पैसे लगते हैं",
+        "सब्सक्रिप्शन",
+        "app free hai",
+        "paisa lagta hai",
+        "muft hai"
       ],
       "question": "Is Krushi Ratn free to use?",
       "answer": "Yes, Krushi Ratn is completely free to download and use. Registration is free. Browsing products, checking mandi bhav, watching videos, reading news, and posting Buy/Sell listings are all free. You only pay when you buy a product from K-Shop (you pay the product price + delivery). There is no subscription fee."
@@ -222,7 +264,53 @@
         "buysell payment",
         "contact buyer",
         "safe",
-        "fraud"
+        "fraud",
+        "is it safe",
+        "safe to buy",
+        "safe marketplace",
+        "trust marketplace",
+        "marketplace safe",
+        "buying safe",
+        "safe transaction",
+        "secure buying",
+        "is marketplace safe",
+        "can i trust",
+        "fraud protection",
+        "સુરક્ષિત",
+        "ખરીદી સુરક્ષિત",
+        "માર્કેટપ્લેસ સુરક્ષિત",
+        "માર્કેટપ્લેસ વિશ્વસનીય",
+        "ફ્રોડ",
+        "છેતરપિંડી",
+        "શું ખરીદી સુરક્ષિત છે",
+        "શું માર્કેટપ્લેસ સુરક્ષિત છે",
+        "ખરીદી કરવી સુરક્ષિત",
+        "માર્કેટપ્લેસમાંથી ખરીદી",
+        "surakshit",
+        "kharidi surakshit",
+        "marketplace surakshit",
+        "fraud thi bachav",
+        "chetarpindi",
+        "marketplace par vishwas",
+        "shu kharidi surakshit che",
+        "marketplace safe che",
+        "सुरक्षित",
+        "खरीदारी सुरक्षित",
+        "मार्केटप्लेस सुरक्षित",
+        "क्या सुरक्षित है",
+        "धोखाधड़ी",
+        "फ्रॉड",
+        "क्या मार्केटप्लेस से खरीदारी सुरक्षित है",
+        "मार्केटप्लेस पर भरोसा",
+        "सुरक्षित खरीद",
+        "खरीदारी करना सुरक्षित",
+        "मार्केटप्लेस विश्वसनीय",
+        "surakshit hai",
+        "kharidari surakshit",
+        "marketplace surakshit hai",
+        "kya safe hai",
+        "dhokha",
+        "fraud se bachav"
       ],
       "question": "How does buying work on the Buy/Sell marketplace?",
       "answer": "The Buy/Sell marketplace is a direct farmer-to-farmer trading platform. When you find a product, you contact the seller directly by phone or WhatsApp — there is no in-app payment for Buy/Sell. Payment and handover arrangements are made directly between buyer and seller. Always verify the product before paying. Krushi Ratn is not responsible for individual Buy/Sell transactions, but you can report fraudulent listings through the 'Report Listing' option."
@@ -413,7 +501,11 @@
         "યાર્ડ",
         "માર્કેટ યાર્ડ",
         "મંડી",
-        "APMC"
+        "यार्ड क्या है",
+        "मंडी क्या है",
+        "यार्ड का मतलब",
+        "yard kya hai",
+        "mandi kya hai"
       ],
       "question": "What is a yard in Krushi Ratn?",
       "answer": "A Yard is an official government-regulated marketplace where farmers bring their harvested crops to sell at a public auction. In Krushi Ratn, the Mandi Bhav section shows real-time crop prices from yards across Gujarat. Each yard reports the minimum price, maximum price, and modal price for each crop on a daily basis. Yards are organized by city and taluka. Examples of yards in Gujarat include Rajkot Yard, Gondal Yard, Unjha Yard, Bhavnagar Yard, and 100+ others. To see prices from a specific yard: open Mandi Bhav → select district → select yard → select crop."
@@ -520,43 +612,6 @@
     {
       "id": "gq_028",
       "tags": [
-        "crops",
-        "crop list",
-        "kayi pak",
-        "pak list",
-        "which crops",
-        "kya pak",
-        "crops available",
-        "crops in krushi ratn",
-        "available crops",
-        "pak kayi che",
-        "kya kya pak che",
-        "crop name list",
-        "all crops",
-        "crop types",
-        "kayi crops uplabdh",
-        "all available crops",
-        "crops for mandi",
-        "mandi crops",
-        "krushi ratn crops",
-        "pak ni yadi",
-        "pak vishe",
-        "vegetable",
-        "anaaj",
-        "ઘઉં",
-        "કપાસ",
-        "મગફળી",
-        "પાક",
-        "પાક ઉપલબ્ધ",
-        "crops name",
-        "farming crops"
-      ],
-      "question": "What crops are available in Krushi Ratn?",
-      "answer": "Krushi Ratn's Mandi Bhav section tracks prices for 40+ crops from Gujarat yards. The main crops available are: Cotton (Kapas / કપાસ), Groundnut (Magfali / મગફળી), Wheat (Ghau / ઘઉં), Bajra (Bajri / બાજરી), Sesame (Tal / તલ), Castor (Erandi / એરંડા), Jowar (Jwar / જુવાર), Green Gram (Mung / મગ), Chickpea (Chana / ચણા), Soybean (Soya / સોયાબીન), Corn (Makai / મકાઈ), Onion (Kanda / ડુંગળી), Garlic (Lasan / લસણ), Tomato (Tameta / ટામેટા), Potato (Bataka / બટાકા), Pigeon Pea (Tuvar / તુવેર), Black Gram (Adad / અડદ), Rice (Chaval / ચોખા), Sugarcane (Sherdio / શેરડી), Moth Bean (Math / મઠ), Fennel (Variyali / વરિયાળી), Cumin (Jeera / જીરા), Coriander (Dhana / ધાણા), and more. Not all crops have data for every yard — availability depends on what is being actively traded at that yard on a given day. Ask me any crop name and I will check the current price data."
-    },
-    {
-      "id": "gq_029",
-      "tags": [
         "cities",
         "city list",
         "kayi cities",
@@ -593,7 +648,7 @@
       "answer": "Krushi Ratn covers all major cities, districts, and talukas across Gujarat for mandi bhav and news. Cities with market yard data include: Ahmedabad, Rajkot, Surat, Vadodara, Bhavnagar, Jamnagar, Junagadh, Mehsana, Gandhinagar, Anand, Bharuch, Navsari, Amreli, Morbi, Patan, Kutch (Bhuj), Sabarkantha, Banaskantha, Gondal, Unjha, Visnagar, Surendranagar, Botad, Porbandar, Gir Somnath, and many more talukas and villages across all 33 districts of Gujarat. You can ask me 'what yards are in Surat' or 'Rajkot ma kayi yards che' and I will fetch the list from the database. For news, you can filter by any Gujarat city or district. The app covers 200+ market yards and 1000+ cities and talukas in Gujarat."
     },
     {
-      "id": "gq_030",
+      "id": "gq_029",
       "tags": [
         "what can i do",
         "krushi ratn ma shu kari shakay",
@@ -623,7 +678,7 @@
       "answer": " On Krushi Ratn app, you can do multiple things: (1) Check the latest crop prices (Mandi Bhav) in nearby market yards. (2) Stay updated with agricultural news and local updates. (3) Sell your crops directly to companies or market yards. (4) Buy agricultural products and services. (5) Buy or sell old farming equipment and goods through the marketplace"
     },
     {
-      "id": "gq_031",
+      "id": "gq_030",
       "tags": [
         "services",
         "app services",
@@ -661,7 +716,7 @@
       "answer": "Krushi Ratn provides the following services: (1) Latest agricultural news and updates. (2) Latest crop selling prices (Mandi Bhav) from nearby market yards. (3) Facility to sell crops directly to companies. (4) Buy or sell old farming products and equipment. (5)Purchase agriculture-related equipment and supplies."
     },
     {
-      "id": "gq_032",
+      "id": "gq_031",
       "tags": [
         "buyer inquiry",
         "buyer contact",
@@ -701,7 +756,7 @@
       "answer": "After receiving buyer inquiries, you can directly contact the buyer using the provided mobile number and location details in the order or listing. The buying and selling process in the Buy/Sell module is manual, so you need to communicate and finalize the deal directly with the buyer."
     },
     {
-      "id": "gq_033",
+      "id": "gq_032",
       "tags": [
         "before buying",
         "check before buy",
@@ -739,7 +794,7 @@
       "answer": "Before buying any product on Krushi Ratn, check the following: For K-Shop Products: (1) Product Name and Model Number — ensure it matches exactly what you need. Ask me 'Balwan Power Weeder model number' to verify; (2) Price and Discount — check the original price and the discounted price. Look for the final amount payable; (3) Specifications — check HP, capacity, weight, power source, and dimensions to ensure it fits your farm requirement; (4) Company / Brand — verify the manufacturer. Krushi Ratn lists only verified companies like MITSUYAMA, RAPL, and Balwan; (5) Delivery Terms — check estimated delivery time and whether delivery is available in your area; (6) Warranty — check if the product comes with a company warranty. For Buy/Sell Listings: (1) Seller Contact — verify the seller's phone number is valid; (2) Product Photos — look at all uploaded photos carefully; (3) Age and Condition — for animals, ask for age, vaccination records, and health status. For equipment, ask for year of purchase and service history; (4) Price Comparison — compare with similar listings before finalizing; (5) Meet in Person — always inspect the item physically before making payment. Never pay in advance without seeing the product."
     },
     {
-      "id": "gq_034",
+      "id": "gq_033",
       "tags": [
         "livestock documents",
         "animal sell documents",
@@ -778,7 +833,7 @@
       "answer": "The required details and documentation for livestock selling are defined by the Krushi Ratn team. Based on the product or listing type, the app will specify what information or supporting details are needed while posting the listing."
     },
     {
-      "id": "gq_035",
+      "id": "gq_034",
       "tags": [
         "app problem",
         "issue with app",
@@ -814,15 +869,21 @@
         "એપ ઇશ્યૂ",
         "app samssya",
         "app na prablem",
-        "problem aavyo",
-        "issue aavyo",
-        "shu karvanu"
+        "एप काम नहीं कर रहा",
+        "एप में समस्या",
+        "एप की समस्या",
+        "तकनीकी समस्या",
+        "एप एरर",
+        "एप क्रैश",
+        "app kaam nahi karta",
+        "app mein samasya",
+        "technical samasya"
       ],
       "question": "What should I do if I face issues using the app?",
       "answer": "If you face any issue while using the Krushi Ratn app, you can contact support through the app itself. Go to Profile → Help & Support, where you will find contact details such as email and phone numbers to resolve your issue."
     },
     {
-      "id": "gq_036",
+      "id": "gq_035",
       "tags": [
         "chatbot language",
         "language support",
@@ -861,7 +922,7 @@
       "answer": "The Krushi Ratn AI chatbot is currently available only in Gujarati (ગુજરાતી). For example: 'કપાસ નો ભાવ શું છે?' or 'ઘઉં ની માહિતી આપો'. You can type in Gujarati, and the chatbot will understand and respond accordingly. In future updates, the chatbot will support multiple languages including Gujarati, English, and Hindi, allowing users to interact in their preferred language."
     },
     {
-      "id": "gq_037",
+      "id": "gq_036",
       "tags": [
         "home screen",
         "home screen features",
@@ -894,7 +955,7 @@
       "answer": "On home screen, users can view Latest news and updates, K-Shop products for agricultural needs, Buy/Sell marketplace for trading old or used items, educational farming videos, upcoming features of the app, and daily crop prices from different market yards."
     },
     {
-      "id": "gq_038",
+      "id": "gq_037",
       "tags": [
         "different from other apps",
         "unique",
@@ -933,6 +994,101 @@
       ],
       "question": "What makes Krushi Ratn different from other apps?",
       "answer": "Krushi Ratn is built specifically for Gujarat farmers and stands apart from general apps in these ways: (1) All-in-One for Gujarat Farmers — mandi bhav, K-Shop, buy/sell, videos, news, and crop selling are all in a single app. No need to use 5 different apps; (2) Real-time Mandi Bhav — live crop prices from 200+ APMC yards across all Gujarat districts updated daily. Most apps only show delayed or limited data; (3) Gujarati-First Design — the entire app, AI chatbot, and content is available in Gujarati. The AI understands Gujarati script, Romanized Gujarati, and English — built for farmers who are not comfortable in English; (4) Verified K-Shop Companies — only genuine, verified agricultural companies sell on K-Shop. No counterfeit products; (5) Direct Farmer-to-Farmer Trading — the Buy/Sell marketplace connects farmers directly with no middlemen or commission fees; (6) AI Chatbot in Gujarati — ask any farming or price question by voice or text in Gujarati and get an instant answer. No other agricultural app in Gujarat offers this; (7) Crop Selling to Companies — farmers can directly sell harvested crops to verified companies at transparent prices, eliminating traders and commission agents; (8) Free to Use — registration, mandi bhav, videos, news, and buy/sell listings are all completely free. You only pay when buying a K-Shop product."
+    },
+    {
+      "id": "gq_038",
+      "tags": [
+        "buy sell process",
+        "how buy sell works",
+        "buying selling steps",
+        "sell product process",
+        "list item for sale",
+        "how to sell equipment",
+        "how to sell livestock",
+        "how to buy equipment",
+        "how to buy livestock",
+        "marketplace process",
+        "farmer marketplace",
+        "agriculture marketplace",
+        "equipment listing process",
+        "livestock listing process",
+        "buy sell app workflow",
+        "kharidi vechan process",
+        "kharidi vechan kevi rite",
+        "buy sell kevi rite",
+        "marketplace kevi rite kaam kare",
+        "sell kevi rite",
+        "buy kevi rite",
+        "ખરીદ વેચાણ પ્રક્રિયા",
+        "ખરીદ વેચાણ કેવી રીતે",
+        "ખરીદવા વેચવા પગલાં",
+        "સામાન વેચવાની રીત",
+        "પશુ ખરીદી વેચાણ"
+      ],
+      "question": "How does the process of buying and selling farming equipment and livestock work in the Krishi Ratna app?",
+      "answer": "The buying and selling process in the Krushi Ratn app is very simple. For Sellers: (1) Login to the app.(2) Select the “Sell” option.(3) Add product (farm equipment or livestock) details (photo, price, description).(4) Your listing will start appearing in the app. For Buyer: (1) Go to the app and select the required category (2) View available products (3) Click on the selected product to view details"
+    },
+    {
+      "id": "gq_039",
+      "tags": [
+        "contact seller",
+        "contact buyer",
+        "how to contact seller",
+        "how to contact buyer",
+        "call seller",
+        "message seller",
+        "whatsapp seller",
+        "seller phone number",
+        "seller contact details",
+        "buyer seller communication",
+        "direct communication",
+        "chat with seller",
+        "reach seller",
+        "sampark kevi rite",
+        "seller contact kevi rite",
+        "buyer contact kevi rite",
+        "seller ne call kevi rite",
+        "seller number kevi rite male",
+        "ખરીદનાર વેચનાર સંપર્ક",
+        "સંપર્ક કેવી રીતે",
+        "વેચનાર સંપર્ક",
+        "ખરીદનાર સંપર્ક",
+        "કોલ સેલર",
+        "વોટ્સએપ સેલર",
+        "સેલર નો નંબર"
+      ],
+      "question": "How is communication between buyer and seller?",
+      "answer": "(1) Buyer can go to the product details page and select “Contact Seller” or call/message option. (2) From there, the seller’s contact number is directly available. Direct communication (Call/WhatsApp) can be done between the buyer and the seller"
+    },
+    {
+      "id": "gq_040",
+      "tags": [
+        "payment",
+        "payment method",
+        "payment option",
+        "cash on delivery",
+        "COD",
+        "UPI",
+        "online payment",
+        "card payment",
+        "debit card",
+        "credit card",
+        "what payment",
+        "which payment",
+        "payment available",
+        "payment accepted",
+        "pay by card",
+        "pay by UPI",
+        "પેમેન્ટ",
+        "પેમેન્ટ પદ્ધતિ",
+        "ચુકવણી",
+        "પૈસા કેવી રીતે આપવા",
+        "भुगतान विधि",
+        "भुगतान कैसे",
+        "पेमेंट ऑप्शन"
+      ],
+      "question": "What payment methods are accepted?",
+      "answer": "Currently, all K-Shop orders are fulfilled through **Cash on Delivery (COD)** only. You pay in cash to the delivery person when your order arrives at your address. Online payment methods (UPI, net banking, debit/card) are not available at this time but may be added in future updates.\n\nFor the Buy/Sell Marketplace, there is no in-app payment system. Buyers and sellers contact each other directly and arrange payment between themselves."
     }
   ]
 }
