@@ -296,7 +296,9 @@ class StructuredLogger:
                   f"🔧 TOOLS SELECTED: {', '.join(tools)}", query=query[:80])
 
     def sql_generation(self, query: str, table: str):
-        self._log(logging.INFO, f"📊 SQL GENERATED", table=table, sql=query[:200])
+        # Full SQL on a single line (whitespace-collapsed) so the audit harness
+        # and any log reader can capture the COMPLETE query, not a 200-char prefix.
+        self._log(logging.INFO, f"📊 SQL GENERATED", table=table, sql=" ".join(query.split()))
 
     def sql_execution_start(self, table: str, sql: str):
         self._log(logging.INFO, f"🔍 SQL EXECUTING", table=table, sql=sql[:150])
