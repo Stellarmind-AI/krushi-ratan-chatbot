@@ -250,3 +250,7 @@ app/cache/query_cache.json
 
 # keyword dictionary 
 data/
+
+# testing/audit 
+runs/
+audit/README.md
