@@ -1,18 +1,18 @@
 """
 Main Orchestrator — Production-grade, fully wired.
 
-Pipeline per query:
-  [WebSocket] ──► Route Agent ──► SQL Flow
-                             ──► Navigation Flow
-                             ──► General Flow
-                             ──► Greeting Flow
+Pipeline per query (Stage 1 NLU runs in chat_handler BEFORE this):
+  [NLUFrame] ──► dispatch by frame.intent ──► SQL Flow
+                                          ──► Navigation Flow
+                                          ──► General Flow
+                                          ──► Greeting Flow
 
 Every step is logged with timing via StructuredLogger.
-LLM always answers in ENGLISH — Sarvam translates to user language after.
+LLM always answers in ENGLISH — translation to user language happens after.
 
 Optimizations:
   • Query cache      → skip LLM entirely for repeated SQL questions
-  • Intent router    → skip tool-selection LLM for obvious SQL questions
+  • Frame intent     → deterministic table injection (no routing LLM)
   • Pre-compiled schemas → compact per-table strings built once at startup
 """
 
@@ -20,13 +20,14 @@ import re
 import time
 from typing import List, Dict, Any, Optional
 
-from app.services.agent.route_agent    import get_route_agent, FlowType
 from app.services.agent.query_cache    import get_query_cache, strip_fillers, is_filler_token
 from app.services.agent.intent_router  import get_intent_router
 from app.services.agent.tool_selector  import get_tool_selector, build_fk_deps_from_tools
 from app.services.agent.answer_generator import get_answer_generator
 from app.services.agent.knowledge_handler import get_knowledge_handler
 from app.services.agent.status_filter     import filter_query_results
+from app.services.agent.clarification     import get_confirmed_tables, get_intent_note
+from app.models.nlu_frame                 import NLUFrame
 from app.services.database.query_executor import get_query_executor
 from app.services.database.query_validator import query_validator
 from app.services.entity_normalizer       import get_entity_normalizer
@@ -50,7 +51,6 @@ class Orchestrator:
 
     def __init__(self, schema_generator: SchemaGenerator):
         self.schema_generator  = schema_generator
-        self.route_agent       = get_route_agent()
         self.query_cache       = get_query_cache()
         self.intent_router     = get_intent_router()
         self.tool_selector     = get_tool_selector()
@@ -159,120 +159,74 @@ class Orchestrator:
 
     # ── Main entry point ────────────────────────────────────────────────────────
 
-    async def process_query(
-        self,
-        user_query: str,
-        target_language: Optional[str] = None,   # kept for API compat, NOT used for LLM
-        confirmed_intent: Optional[str] = None,  # F1: set when user picked a clarification option
-        keyword_hint: str = "",                  # F1: matched keyword for targeted SQL generation
-        force_navigation: bool = False,          # Nav signal detected — skip route agent
-    ) -> Dict[str, Any]:
+    async def process_query(self, frame: NLUFrame) -> Dict[str, Any]:
         """
-        Process user query through route agent → correct flow.
+        Dispatch an NLUFrame (built by Stage 1 in chat_handler) to its flow.
+
+        The frame is the single decision point — no routing LLM here:
+          greeting                      → greeting flow (raw input, any language)
+          general                       → general flow (English paraphrase)
+          navigation / crop_buy / crop_sell → navigation flow (English paraphrase)
+          SQL intents                   → SQL flow (legacy intent key + primary
+                                          keyword bridge until Phases 2-3)
 
         IMPORTANT: Answer is always returned in ENGLISH.
-        target_language param is ignored here — translation happens in chat_handler.
-
-        confirmed_intent — when the F1 Confirmation Layer paused the pipeline and
-        the user selected a clarification option, chat_handler passes the chosen
-        intent_key here.  This causes _flow_sql to skip LLM tool-selection and use
-        the pre-resolved table list directly.
-
-        force_navigation — when the F1 nav signal detector found navigation patterns
-        (કેવી રીતે, પગલાં, steps to, etc.), this forces NAVIGATION flow and skips
-        the route agent entirely.  Prevents the route agent from mis-classifying
-        navigation questions as SQL (e.g. "મારા ઓર્ડર ક્યાં છે?" → SQL).
+        Translation to the user's language happens in chat_handler after this.
 
         Returns dict with keys: answer, sources, query_results, selected_tools,
                                 flow, cache_hit
         """
         pipeline_start = time.perf_counter()
+        user_query = frame.raw_input or frame.question_en
         logger.pipeline_start(user_query)
 
         try:
-            # ── SQL FLOW DISABLED FOR CURRENT RELEASE ──────────────────────
-            # Database queries are disabled until user data security review
-            # is complete. To re-enable, set ENABLE_SQL_FLOW=true in .env
-            #
-            # When disabled:
-            #   - F1 confirmed_intent (which forces SQL) → redirects to app
-            #   - Route agent classifying as SQL → redirects to app
-            #   - Only NAVIGATION, GENERAL, and GREETING flows are active
-            # ───────────────────────────────────────────────────────────────
-            _sql_enabled = settings.is_sql_enabled
+            intent = frame.intent
+            # English paraphrase drives the English-internal flows; raw input
+            # is kept for greeting (it replies warmly to whatever was said).
+            question_en = frame.question_en or user_query
 
-            if confirmed_intent and not _sql_enabled:
-                logger.info(f"SQL FLOW DISABLED — confirmed_intent='{confirmed_intent}' blocked")
-                return self._sql_disabled_response()
+            logger.step("STEP 1 / FRAME DISPATCH",
+                        f"intent={intent} qtype={frame.query_type}")
 
-            # ── STEP 1: Route Agent ─────────────────────────────────────────
-            # When F1 confirmed_intent is already set, the user already answered
-            # the clarification question — the intent is definitively SQL data.
-            # Skip route classification entirely and go straight to SQL so the
-            # route agent cannot mis-classify as GENERAL/NAVIGATION.
-            # Example: "wheat ni mahiti" — route agent might say GENERAL because
-            # "mahiti" = "info", but the user confirmed they want DB price data.
-            if confirmed_intent:
-                logger.step(
-                    "STEP 1 / ROUTE AGENT",
-                    f"SKIPPED — F1 confirmed_intent='{confirmed_intent}' forces SQL flow",
-                )
-                logger.step_done("STEP 1 / ROUTE AGENT", 0, flow="SQL", reason="f1_bypass")
-                result      = await self._flow_sql(user_query, confirmed_intent=confirmed_intent, keyword_hint=keyword_hint)
-                result["flow"] = "SQL"
-                total_ms = (time.perf_counter() - pipeline_start) * 1000
-                logger.pipeline_end("SQL", total_ms, cached=result.get("cache_hit", False))
-                return result
-
-            if force_navigation:
-                logger.step(
-                    "STEP 1 / ROUTE AGENT",
-                    "SKIPPED — nav signal detected, forcing NAVIGATION flow",
-                )
-                logger.step_done("STEP 1 / ROUTE AGENT", 0, flow="NAVIGATION", reason="nav_signal")
-                result = await self._flow_navigation(user_query)
-                result["flow"] = "NAVIGATION"
-                total_ms = (time.perf_counter() - pipeline_start) * 1000
-                logger.pipeline_end("NAVIGATION", total_ms)
-                return result
-
-            # ── Route Agent ALWAYS runs (single source of flow decisions) ────
-            # F1 only does entity extraction; flow classification is exclusively
-            # the route agent's job. This guarantees one decision point and
-            # eliminates the bypass bug.
-            logger.step("STEP 1 / ROUTE AGENT", "Classifying question")
-            with Timer() as t:
-                flow: FlowType = await self.route_agent.classify(user_query)
-            logger.step_done("STEP 1 / ROUTE AGENT", t.elapsed_ms, flow=flow)
-
-            # ── Dispatch to correct flow ────────────────────────────────────
-            if flow == "GREETING":
+            if intent == "greeting":
                 result = await self._flow_greeting(user_query)
+                flow = "GREETING"
 
-            elif flow == "NAVIGATION":
-                result = await self._flow_navigation(user_query)
+            elif intent in ("navigation", "crop_buy", "crop_sell"):
+                result = await self._flow_navigation(question_en)
+                flow = "NAVIGATION"
 
-            elif flow == "GENERAL":
-                result = await self._flow_general(user_query)
+            elif intent in ("general", "ambiguous"):
+                # "ambiguous" only lands here when clarification was impossible
+                # (e.g. SQL disabled) — degrade gracefully to general info.
+                result = await self._flow_general(question_en)
+                flow = "GENERAL"
 
-            elif flow == "SQL":
-                # SQL flow routing — respects ENABLE_SQL_FLOW setting
-                if not _sql_enabled:
-                    # SQL flow disabled — redirect to app
-                    logger.info(f"SQL FLOW DISABLED — route agent said SQL, returning redirect")
+            elif frame.is_sql_intent:
+                if not settings.is_sql_enabled:
+                    logger.info("SQL FLOW DISABLED — frame intent "
+                                f"'{intent}' redirected to app")
                     result = self._sql_disabled_response()
                     result["flow"] = "SQL_DISABLED"
                     total_ms = (time.perf_counter() - pipeline_start) * 1000
                     logger.pipeline_end("SQL_DISABLED", total_ms)
                     return result
-                else:
-                    # SQL flow enabled — execute database query
-                    result = await self._flow_sql(user_query, confirmed_intent=confirmed_intent, keyword_hint=keyword_hint)
-            
+                legacy_key = frame.legacy_intent_key
+                keyword = frame.primary_keyword()
+                logger.info(f"🎯 FRAME → SQL | intent={intent} "
+                            f"legacy_key={legacy_key} keyword={keyword!r}")
+                result = await self._flow_sql(
+                    question_en,
+                    confirmed_intent=legacy_key,
+                    keyword_hint=keyword,
+                )
+                flow = "SQL"
+
             else:
-                # Unknown flow type — should not reach here
-                logger.warning(f"Unknown flow type: {flow}")
+                logger.warning(f"Unknown frame intent: {intent}")
                 result = self._out_of_scope_response()
+                flow = "GENERAL"
 
             result["flow"] = flow
             total_ms = (time.perf_counter() - pipeline_start) * 1000
@@ -368,15 +322,13 @@ class Orchestrator:
         used directly.  This is the only change F1 makes to this method.
         """
 
-        # ── F1: Confirmed intent shortcut (Steps 3 & 4 bypassed) ────────────
+        # ── Frame intent shortcut (Steps 3 & 4 bypassed) ────────────────────
         f1_injected_tools: Optional[list] = None
         intent_note: str = ""   # always defined; set when confirmed_intent present
         if confirmed_intent:
-            from app.services.agent.confirmation_layer import get_confirmation_layer
-            _cl = get_confirmation_layer()
-            f1_injected_tools = _cl.get_confirmed_tables(confirmed_intent)
+            f1_injected_tools = get_confirmed_tables(confirmed_intent)
             f1_injected_tools = self.privacy_policy.filter_tool_names(f1_injected_tools)
-            intent_note       = _cl.get_intent_note(confirmed_intent)
+            intent_note       = get_intent_note(confirmed_intent)
             if f1_injected_tools:
                 logger.info(
                     f"🎯 F1 confirmed intent='{confirmed_intent}' → "

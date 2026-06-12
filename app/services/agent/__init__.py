@@ -1,8 +1,5 @@
-from app.services.agent.confirmation_layer import (
-    get_confirmation_layer,
-    ConfirmationLayer,
+from app.services.agent.clarification import (
     ClarificationRequest,
     ClarificationOption,
-    ConfirmedIntent,
     INTENT_TO_TABLES,
 )

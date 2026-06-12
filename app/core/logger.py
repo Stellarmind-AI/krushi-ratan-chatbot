@@ -388,6 +388,3 @@ def get_websocket_logger() -> StructuredLogger:
 
 def get_audio_logger() -> StructuredLogger:
     return get_logger("audio")
-
-def get_route_logger() -> StructuredLogger:
-    return get_logger("route_agent")

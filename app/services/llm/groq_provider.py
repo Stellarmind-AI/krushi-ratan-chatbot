@@ -44,7 +44,11 @@ class GroqProvider(BaseLLMProvider):
             
             if max_tokens:
                 request_params["max_tokens"] = max_tokens
-            
+
+            # JSON mode (structured output) — pass through when requested
+            if kwargs.get("response_format"):
+                request_params["response_format"] = kwargs["response_format"]
+
             # Add tools if provided
             if tools:
                 request_params["tools"] = self._format_tools(tools)
