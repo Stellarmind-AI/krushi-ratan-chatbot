@@ -91,7 +91,9 @@
     "remember",
     "session",
     "zipcode",
-    "offline_buyer"
+    "offline_buyer",
+    "contact",
+    "whatsapp"
   ],
   "user_identifier_column_patterns": [
   ]

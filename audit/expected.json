@@ -1,0 +1,538 @@
+{
+  "_meta": {
+    "description": "Ground-truth expectations for audit/questions.md. One entry per question TRIPLET (same question in Gujarati/Hindi/English) — expectations are language-independent by design: all three variants must produce the SAME intent, entities, and query type. This is the cross-language consistency check.",
+    "join_key": "qids = question numbers in audit/questions.md",
+    "intents": ["greeting", "general", "navigation", "crop_price", "crop_buy", "crop_sell", "equipment_kshop", "equipment_used", "kshop_product", "buy_sell_product", "seed_info", "news", "video", "ambiguous"],
+    "query_types": ["specific_search", "list_all", "count", "general_knowledge", null],
+    "expected_flow": "legacy flow label (GREETING/GENERAL/NAVIGATION/SQL) for comparing against the CURRENT pipeline baseline before Phase 1 ships",
+    "expected_entities": "canonical Gujarati values as they should resolve AFTER Stage 2 (language-independent). Keys: crop, category, location, equipment, animal, news_type, topic, identifier. 'topic' and 'identifier' are free-text — not catalog-checkable.",
+    "expected_constraints": "informative list of constraints the user EXPLICITLY asked for. Anything not listed here must NOT appear in generated SQL (hallucination check).",
+    "review_note": "flags where my prefilled label needs the project owner's confirmation",
+    "data_dependent": "true = correct answer depends on rows existing in the DB; run validate_expectations.py to check entity presence against the catalog"
+  },
+  "expectations": [
+    {
+      "qids": [1, 2, 3],
+      "module": "1-greeting",
+      "summary_en": "Ram Ram brother! Is anyone awake or is everyone asleep?",
+      "expected_intent": "greeting",
+      "expected_flow": "GREETING",
+      "expected_query_type": null,
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": ""
+    },
+    {
+      "qids": [4, 5, 6],
+      "module": "1-greeting",
+      "summary_en": "Jai Shree Krishna, how do I start chatting in this?",
+      "expected_intent": "navigation",
+      "expected_flow": "NAVIGATION",
+      "expected_query_type": null,
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": "Greeting + real question hybrid — the question part ('how to start chatting') wins per routing rule. Alternative acceptable label: general."
+    },
+    {
+      "qids": [7, 8, 9],
+      "module": "1-greeting",
+      "summary_en": "Hey brother, is there anyone to reply in this or is it all just empty?",
+      "expected_intent": "greeting",
+      "expected_flow": "GREETING",
+      "expected_query_type": null,
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": "Conversational presence-check — a warm greeting-style reply is correct. Alternative: general."
+    },
+    {
+      "qids": [10, 11, 12],
+      "module": "1-greeting",
+      "summary_en": "Sitaram brother, explain to me how this app works.",
+      "expected_intent": "general",
+      "expected_flow": "GENERAL",
+      "expected_query_type": "general_knowledge",
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": ""
+    },
+    {
+      "qids": [13, 14, 15],
+      "module": "2-general",
+      "summary_en": "Will using this app deduct money from my bank, or is it entirely free?",
+      "expected_intent": "general",
+      "expected_flow": "GENERAL",
+      "expected_query_type": "general_knowledge",
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": "Should match the 'is the app free' entry in general_questions.json"
+    },
+    {
+      "qids": [16, 17, 18],
+      "module": "2-general",
+      "summary_en": "I need to call your head office, give me a working phone number.",
+      "expected_intent": "general",
+      "expected_flow": "GENERAL",
+      "expected_query_type": "general_knowledge",
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": "Needs a contact/support entry in general_questions.json — verify one exists with the real number"
+    },
+    {
+      "qids": [19, 20, 21],
+      "module": "2-general",
+      "summary_en": "Who created Krushi Ratn? Government or private company?",
+      "expected_intent": "general",
+      "expected_flow": "GENERAL",
+      "expected_query_type": "general_knowledge",
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": "Verify general_questions.json has a company/ownership entry; if not, honest 'no info' is the correct answer"
+    },
+    {
+      "qids": [22, 23, 24],
+      "module": "2-general",
+      "summary_en": "If fraud occurs, who supports me? Where is your office?",
+      "expected_intent": "general",
+      "expected_flow": "GENERAL",
+      "expected_query_type": "general_knowledge",
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": ""
+    },
+    {
+      "qids": [25, 26, 27],
+      "module": "3-navigation",
+      "summary_en": "I want to sell my old bull and tractor — where do I go to upload photos?",
+      "expected_intent": "navigation",
+      "expected_flow": "NAVIGATION",
+      "expected_query_type": null,
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": "Explicit SELL process → navigation (Buy/Sell listing steps). Entities (ટ્રેક્ટર, સાંઢ) are context, not search keywords."
+    },
+    {
+      "qids": [28, 29, 30],
+      "module": "3-navigation",
+      "summary_en": "Where can I watch the video by the export expert? Open that page.",
+      "expected_intent": "navigation",
+      "expected_flow": "NAVIGATION",
+      "expected_query_type": null,
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": "DECIDED (owner, 2026-06-12): 'where can I watch X / open that page' → NAVIGATION — guide the user to the videos screen, no DB search. Explicit list requests ('show me videos about X') remain video/SQL."
+    },
+    {
+      "qids": [31, 32, 33],
+      "module": "3-navigation",
+      "summary_en": "Where does the video about the new automatic cotton sowing method appear?",
+      "expected_intent": "navigation",
+      "expected_flow": "NAVIGATION",
+      "expected_query_type": null,
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": "DECIDED (owner, 2026-06-12): same policy as Q28-30 — 'where does this video appear' → NAVIGATION, guide to videos screen."
+    },
+    {
+      "qids": [34, 35, 36],
+      "module": "3-navigation",
+      "summary_en": "I want to buy a new seed drill from the company — which section do I order in?",
+      "expected_intent": "navigation",
+      "expected_flow": "NAVIGATION",
+      "expected_query_type": null,
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": "Explicit BUY process ('which section do I visit to place the order') → navigation per agreed rule. If user had asked its price → equipment_kshop/SQL."
+    },
+    {
+      "qids": [37, 38, 39],
+      "module": "3-navigation",
+      "summary_en": "Where is the page to fill the government solar pump subsidy form?",
+      "expected_intent": "navigation",
+      "expected_flow": "NAVIGATION",
+      "expected_query_type": null,
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": "App may have no subsidy-form feature — honest 'feature not available, schemes appear in news section' is a correct answer. Acceptable alternative: news."
+    },
+    {
+      "qids": [40, 41, 42],
+      "module": "3-navigation",
+      "summary_en": "Show me where the village weather forecast and alerts page is.",
+      "expected_intent": "navigation",
+      "expected_flow": "NAVIGATION",
+      "expected_query_type": null,
+      "expected_entities": {},
+      "expected_constraints": [],
+      "data_dependent": false,
+      "review_note": "User asks WHERE the page is → navigation. If they asked for the forecast itself → news/SQL. Borderline — confirm."
+    },
+    {
+      "qids": [43, 44, 45],
+      "module": "3-navigation",
+      "summary_en": "I want to see listings of buffaloes and cows for sale — where do I click?",
+      "expected_intent": "buy_sell_product",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "animal": ["ભેંસ", "ગાય"]
+      },
+      "expected_constraints": [],
+      "data_dependent": true,
+      "review_note": "DECIDED (owner, 2026-06-12): SQL confirmed — the bot fetches the listings from the database."
+    },
+    {
+      "qids": [46, 47, 48],
+      "module": "4A-crop_price",
+      "summary_en": "Highest price for groundnut Magdi in Bhavnagar city yard today?",
+      "expected_intent": "crop_price",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "crop": ["શીંગ મગડી"],
+        "location": ["ભાવનગર"]
+      },
+      "expected_constraints": ["max_price", "today_or_latest"],
+      "data_dependent": true,
+      "review_note": "Hindi variant says મૂંગફળી મગડી — must resolve to the same canonical શીંગ મગડી."
+    },
+    {
+      "qids": [49, 50, 51],
+      "module": "4A-crop_price",
+      "summary_en": "Per-maund prices for cotton and black sesame in Gariadhar taluka?",
+      "expected_intent": "crop_price",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "crop": ["કપાસ", "તલ કાળા"],
+        "location": ["ગારીયાધાર"]
+      },
+      "expected_constraints": [],
+      "data_dependent": true,
+      "review_note": "MULTI-ITEM: two crops must be searched separately, never concatenated. User said 'taluka' explicitly → taluka-level filter is correct."
+    },
+    {
+      "qids": [52, 53, 54],
+      "module": "4A-crop_price",
+      "summary_en": "Min and max new price of groundnut Kadri in Mahuva yard?",
+      "expected_intent": "crop_price",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "crop": ["શીંગ કાદરી"],
+        "location": ["મહુવા"]
+      },
+      "expected_constraints": ["min_max", "latest"],
+      "data_dependent": true,
+      "review_note": "VARIETY CASE: શીંગ + કાદરી must resolve together. Validator must confirm શીંગ કાદરી exists in DB — this question may be Claude-invented."
+    },
+    {
+      "qids": [55, 56, 57],
+      "module": "4A-crop_price",
+      "summary_en": "Today's pearl millet price under grains or pulses category near Keshod?",
+      "expected_intent": "crop_price",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "crop": ["બાજરો"],
+        "category": ["અનાજ", "કઠોળ"],
+        "location": ["કેશોદ"]
+      },
+      "expected_constraints": ["today_or_latest"],
+      "data_dependent": true,
+      "review_note": "Canonical could be બાજરો or બાજરી — validator will tell. Category words are secondary; direct crop match should win."
+    },
+    {
+      "qids": [58, 59, 60],
+      "module": "4A-crop_price",
+      "summary_en": "List cash crops and oilseeds with rates in Visavadar market yard.",
+      "expected_intent": "crop_price",
+      "expected_flow": "SQL",
+      "expected_query_type": "list_all",
+      "expected_entities": {
+        "category": ["રોકડિયા પાક", "તેલીબીયા"],
+        "location": ["વિસાવદર"]
+      },
+      "expected_constraints": [],
+      "data_dependent": true,
+      "review_note": "CATEGORY-SCOPED LIST: no crop keyword — filter via categories, list crops with prices. Two categories = OR, not concatenated."
+    },
+    {
+      "qids": [61, 62, 63],
+      "module": "4A-crop_price",
+      "summary_en": "Which yard in Jamnagar city has the lowest price for white sesame and soybean?",
+      "expected_intent": "crop_price",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "crop": ["તલ સફેદ", "સોયાબીન"],
+        "location": ["જામનગર"]
+      },
+      "expected_constraints": ["min_price", "group_by_yard"],
+      "data_dependent": true,
+      "review_note": "MULTI-ITEM + aggregation: lowest price per yard."
+    },
+    {
+      "qids": [64, 65, 66],
+      "module": "4A-crop_price",
+      "summary_en": "In which taluka across Gujarat is cotton (cash crops category) priced above 1500?",
+      "expected_intent": "crop_price",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "crop": ["કપાસ"],
+        "category": ["રોકડિયા પાક"],
+        "location": ["ગુજરાત"]
+      },
+      "expected_constraints": ["price_above_1500", "group_by_taluka"],
+      "data_dependent": true,
+      "review_note": "ગુજરાત is a STATE — must land on states filter, never city/taluka/yard."
+    },
+    {
+      "qids": [67, 68, 69],
+      "module": "4A-crop_price",
+      "summary_en": "Minimum price of groundnut Girnar and ginger in Gariadhar?",
+      "expected_intent": "crop_price",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "crop": ["શીંગ ગીરનાર", "આદું"],
+        "location": ["ગારીયાધાર"]
+      },
+      "expected_constraints": ["min_price"],
+      "data_dependent": true,
+      "review_note": "VARIETY (શીંગ ગીરનાર) + plain crop (આદું) in one query — both must survive extraction."
+    },
+    {
+      "qids": [70, 71, 72],
+      "module": "4B-kshop",
+      "summary_en": "What is the current company price for the new seeder?",
+      "expected_intent": "equipment_kshop",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "equipment": ["સીડર"]
+      },
+      "expected_constraints": ["price"],
+      "data_dependent": true,
+      "review_note": "'new' + 'company' → K-Shop, no clarification needed (condition explicit)."
+    },
+    {
+      "qids": [73, 74, 75],
+      "module": "4B-kshop",
+      "summary_en": "Which companies have stock listed under motor starter and battery sprayer categories?",
+      "expected_intent": "kshop_product",
+      "expected_flow": "SQL",
+      "expected_query_type": "list_all",
+      "expected_entities": {
+        "category": ["મોટર સ્ટાર્ટર", "બેટરી સ્પ્રેયર"]
+      },
+      "expected_constraints": ["distinct_companies"],
+      "data_dependent": true,
+      "review_note": "Output entity is COMPANIES, filter entity is two kshop categories — must not merge the two categories into one string."
+    },
+    {
+      "qids": [76, 77, 78],
+      "module": "4B-kshop",
+      "summary_en": "Is there a discounted price on the submersible pump or is it fixed?",
+      "expected_intent": "equipment_kshop",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "equipment": ["સબમર્સિબલ પંપ"]
+      },
+      "expected_constraints": ["discount_price"],
+      "data_dependent": true,
+      "review_note": "kshop_products has discount_price column — answer should compare price vs discount_price."
+    },
+    {
+      "qids": [79, 80, 81],
+      "module": "4B-kshop",
+      "summary_en": "Price of the most expensive item in brush cutter and earth augers categories?",
+      "expected_intent": "kshop_product",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "category": ["બ્રશ કટર", "અર્થ ઓગર્સ"]
+      },
+      "expected_constraints": ["max_price"],
+      "data_dependent": true,
+      "review_note": ""
+    },
+    {
+      "qids": [82, 83, 84],
+      "module": "4B-kshop",
+      "summary_en": "Buying a new branded Jhatka machine — what rate with warranty?",
+      "expected_intent": "equipment_kshop",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "equipment": ["ઝટકા મશીન"]
+      },
+      "expected_constraints": ["price"],
+      "data_dependent": true,
+      "review_note": "Warranty info likely not in DB — answer gives price, honestly omits warranty. Buy-verb present BUT price asked → SQL not navigation (the agreed nuance)."
+    },
+    {
+      "qids": [85, 86, 87],
+      "module": "4C-buy_sell",
+      "summary_en": "Has any farmer listed a second-hand tractor or trolley? Asking price?",
+      "expected_intent": "equipment_used",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "equipment": ["ટ્રેક્ટર", "ટ્રોલી"]
+      },
+      "expected_constraints": ["price"],
+      "data_dependent": true,
+      "review_note": "MULTI-ITEM, 'second hand' → buy_sell, no clarification (condition explicit)."
+    },
+    {
+      "qids": [88, 89, 90],
+      "module": "4C-buy_sell",
+      "summary_en": "Any milk-giving Gir cow for sale cheap under the cattle category?",
+      "expected_intent": "buy_sell_product",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "animal": ["ગાય"],
+        "topic": ["ગીર"]
+      },
+      "expected_constraints": ["min_price"],
+      "data_dependent": true,
+      "review_note": "ગીર is a breed qualifier inside free-text listing names — category filter = ગાય, breed = secondary LIKE on product rows. Confirm handling."
+    },
+    {
+      "qids": [91, 92, 93],
+      "module": "4C-buy_sell",
+      "summary_en": "Is anyone selling a used thresher nearby?",
+      "expected_intent": "equipment_used",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "equipment": ["થ્રેશર"]
+      },
+      "expected_constraints": [],
+      "data_dependent": true,
+      "review_note": "'Nearby' is UNRESOLVABLE (no user location available) — correct behavior: search without location filter, do NOT invent one. Hallucination check."
+    },
+    {
+      "qids": [94, 95, 96],
+      "module": "4C-buy_sell",
+      "summary_en": "On what date was the latest ad posted under sheep/goat or horse categories?",
+      "expected_intent": "buy_sell_product",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "animal": ["ઘેટા બકરા", "ઘોડો"]
+      },
+      "expected_constraints": ["latest_date"],
+      "data_dependent": true,
+      "review_note": "Two categories, ORDER BY created_at DESC LIMIT — date is the answer."
+    },
+    {
+      "qids": [97, 98, 99],
+      "module": "4C-buy_sell",
+      "summary_en": "Phone number of the owner of listing ID Tractor - 1778741216208?",
+      "expected_intent": "buy_sell_product",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "identifier": ["1778741216208"]
+      },
+      "expected_constraints": [],
+      "expected_behavior": "privacy_redirect — the answer must NOT contain any phone number; politely direct the user to the in-app contact-seller flow",
+      "data_dependent": true,
+      "review_note": "DECIDED (owner, 2026-06-12): never expose seller phone numbers. The pipeline may look up the listing, but the answer redirects to the in-app contact guide. Enforce via privacy sanitization + answer prompt; verify in baseline and Phase 3."
+    },
+    {
+      "qids": [100, 101, 102],
+      "module": "4D-news",
+      "summary_en": "New Gujarat government circular for produce subsidies in scheme news?",
+      "expected_intent": "news",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "news_type": ["સરકાર અને યોજના સમાચાર"],
+        "location": ["ગુજરાત"],
+        "topic": ["સબસિડી"]
+      },
+      "expected_constraints": [],
+      "data_dependent": true,
+      "review_note": "DB canonical confirmed: 'સરકાર અને યોજના સમાચાર'. User phrase 'સરકારી યોજના' maps via entity_catalog_manual.json."
+    },
+    {
+      "qids": [103, 104, 105],
+      "module": "4D-news",
+      "summary_en": "Any heavy-rain or cyclone news posted today for Bhavnagar Gariadhar region?",
+      "expected_intent": "news",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "news_type": ["હવામાન અને ચેતવણી સમાચાર"],
+        "location": ["ભાવનગર", "ગારીયાધાર"],
+        "topic": ["અતિવૃષ્ટિ", "વાવાઝોડું"]
+      },
+      "expected_constraints": ["today"],
+      "data_dependent": true,
+      "review_note": "MULTI-LOCATION (city + taluka). 'Today' explicitly said → date filter is correct here."
+    },
+    {
+      "qids": [106, 107, 108],
+      "module": "4D-news",
+      "summary_en": "Update in news types about crop insurance forms for Junagadh Visavadar area?",
+      "expected_intent": "news",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "location": ["જૂનાગઢ", "વિસાવદર"],
+        "topic": ["પાક વીમા યોજના"]
+      },
+      "expected_constraints": [],
+      "data_dependent": true,
+      "review_note": ""
+    },
+    {
+      "qids": [109, 110, 111],
+      "module": "4D-news",
+      "summary_en": "Any weather-department rain forecast news for Keshod taluka this month?",
+      "expected_intent": "news",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "news_type": ["હવામાન અને ચેતવણી સમાચાર"],
+        "location": ["કેશોદ"],
+        "topic": ["વરસાદ આગાહી"]
+      },
+      "expected_constraints": ["this_month"],
+      "data_dependent": true,
+      "review_note": "User explicitly said 'this month' → date filter correct."
+    },
+    {
+      "qids": [112, 113, 114],
+      "module": "4D-news",
+      "summary_en": "Under which news type will I find Mukhyamantri Kisan Sahay Yojana updates?",
+      "expected_intent": "news",
+      "expected_flow": "SQL",
+      "expected_query_type": "specific_search",
+      "expected_entities": {
+        "topic": ["મુખ્યમંત્રી કિસાન સહાય યોજના"]
+      },
+      "expected_constraints": [],
+      "data_dependent": true,
+      "review_note": "Answer = the news_type of matching news rows (reverse lookup: topic → which type)."
+    }
+  ]
+}
