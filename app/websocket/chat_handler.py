@@ -2,15 +2,19 @@
 WebSocket Chat Handler — Krushiratn AI Backend.
 
 Pipeline:
-  Step 1: Detect input language (language_processor)
-  Step 2: Orchestrator → always generates English answer
-  Step 3: Translate English → user's language (Google Translate API)
-  Step 4: Send translated answer to client
+  Step 1: Detect input language (language_processor — detect only, no translation)
+  Step 2: Stage 1 Unified NLU → NLUFrame (one LLM call: intent + verbatim
+          entities + English paraphrase + explicit constraints)
+  Step 3: Ambiguous frame → code-built clarification buttons; button click
+          PATCHES the stored frame (no Stage-1 re-run) and resumes
+  Step 4: Orchestrator dispatches the frame → always generates an ENGLISH answer
+  Step 5: Translate English → user's language (exit boundary)
+  Step 6: Send translated answer to client
 
 This clean separation means:
-  - All LLMs (SQL gen, answer gen, navigation, general) always work in English
-  - Language handling is one centralized step — easy to maintain
-  - Adding new languages in future = update translation_service only
+  - One understanding step; the original language never crosses past Stage 1
+  - All downstream LLMs (SQL gen, answer gen, navigation, general) work in English
+  - Language handling is one centralized exit step — easy to maintain
 """
 
 import json
@@ -22,16 +26,21 @@ from datetime import datetime
 from app.core.logger import get_logger, get_websocket_logger, Timer
 from app.core.config import settings
 from app.models.chat_models import ChatHistory, ChatMessage
+from app.models.nlu_frame import NLUFrame
 from app.services.agent.orchestrator import get_orchestrator
+from app.services.agent.nlu import get_stage1_nlu
+from app.services.agent.clarification import (
+    build_clarification, serialize_request, apply_choice,
+    NAV_INTENT_KEY, INTENT_TO_TABLES,
+)
 from app.services.language_processor import get_language_processor
 from app.services.translation_service import translate_to_user_language, translate_list_to_user_language
-from app.services.agent.confirmation_layer import (
-    get_confirmation_layer, ConfirmedIntent,
-    NAV_INTENT_KEY, build_navigation_query,
-)
 
 logger       = get_websocket_logger()
 pipeline_log = get_logger("pipeline")
+
+# intent_key values a clarification button may legally carry.
+_VALID_CLARIFICATION_KEYS = set(INTENT_TO_TABLES.keys()) | {NAV_INTENT_KEY}
 
 
 def _safe_serialize(obj):
@@ -54,12 +63,12 @@ def _safe_serialize(obj):
 class ChatHandler:
 
     def __init__(self):
-        self.orchestrator         = get_orchestrator()
-        self.language_processor   = get_language_processor()
-        self.confirmation_layer   = get_confirmation_layer()   # F1
-        self._sessions: dict      = {}
-        # F1: stores {session_id: {"query": str, "lang_type": str}}
-        # when the pipeline is paused waiting for the user's clarification pick.
+        self.orchestrator       = get_orchestrator()
+        self.language_processor = get_language_processor()
+        self.nlu                = get_stage1_nlu()
+        self._sessions: dict    = {}
+        # {session_id: {"frame": NLUFrame, "lang_type": str}} while the
+        # pipeline is paused waiting for the user's clarification pick.
         self._pending_clarifications: dict = {}
 
     async def handle_connection(self, websocket: WebSocket, client_id: str):
@@ -81,7 +90,7 @@ class ChatHandler:
                 if msg_type == "text_input":
                     await self._handle_text_input(websocket, data, client_id)
                 elif msg_type == "clarification_response":
-                    # F1: user picked one of the clarification options
+                    # User picked one of the clarification options
                     await self._handle_clarification_response(websocket, data, client_id)
                 elif msg_type == "control":
                     await self._handle_control(websocket, data, client_id)
@@ -105,27 +114,34 @@ class ChatHandler:
         if not text:
             await self._send_error(ws, "Empty text input")
             return
+        # A fresh question invalidates any pending clarification for the session.
+        self._pending_clarifications.pop(session_id, None)
         logger.info("TEXT INPUT", text=text[:80])
         await self._run_pipeline(ws, text, session_id, client_id)
 
     async def _handle_clarification_response(self, ws: WebSocket, data: dict, client_id: str):
         """
-        F1 — Called when the front-end sends back the user's chosen option.
+        User tapped a clarification button.
 
         Expected payload:
           {
             "type":       "clarification_response",
             "session_id": "<session>",        # optional
-            "intent_key": "crop_price"        # the intent_key from the option the user tapped
+            "intent_key": "crop_price"        # from the option the user tapped
           }
 
-        Resumes the paused pipeline with the confirmed intent injected.
+        The stored frame is PATCHED in code (apply_choice) and the pipeline
+        resumes at routing — Stage 1 is NOT re-run, so a second clarification
+        for the same query is structurally impossible.
         """
-        session_id  = data.get("session_id") or client_id
-        intent_key  = data.get("intent_key", "").strip()
+        session_id = data.get("session_id") or client_id
+        intent_key = data.get("intent_key", "").strip()
 
         if not intent_key:
             await self._send_error(ws, "clarification_response missing intent_key")
+            return
+        if intent_key not in _VALID_CLARIFICATION_KEYS:
+            await self._send_error(ws, f"Unknown intent_key: {intent_key}")
             return
 
         pending = self._pending_clarifications.pop(session_id, None)
@@ -136,54 +152,23 @@ class ChatHandler:
             )
             return
 
-        original_query = pending["query"]
-        lang_type      = pending["lang_type"]
-        keyword_hint   = pending.get("keyword_hint", "")
-        scenario       = pending.get("scenario", "")
+        frame: NLUFrame = pending["frame"]
+        lang_type       = pending["lang_type"]
 
-        # ── Navigation pick — route to NAVIGATION flow, not SQL ─────────────
-        # When the user taps the "How to ... in app" button, intent_key is
-        # NAV_INTENT_KEY. The original query (e.g. "tractor") is too vague
-        # for answer_navigation() — we substitute a complete how-to question
-        # built from scenario + keyword so the navigation LLM has clear context.
-        # force_navigation=True bypasses both F1 (already resolved) and the
-        # route agent, going straight to _flow_navigation in the orchestrator.
-        if intent_key == NAV_INTENT_KEY:
-            synthetic_q = build_navigation_query(scenario, keyword_hint)
-            logger.info(
-                "F1 NAVIGATION PICKED",
-                session_id=session_id,
-                scenario=scenario,
-                original_query=original_query[:60],
-                synthetic_query=synthetic_q[:80],
-            )
-            await self._run_pipeline(
-                ws,
-                synthetic_q,
-                session_id,
-                client_id,
-                confirmed_intent=None,
-                lang_type_override=lang_type,
-                keyword_hint="",
-                force_navigation=True,
-            )
-            return
-
-        # ── SQL intent pick — resume orchestrator with confirmed intent ─────
+        frame = apply_choice(frame, intent_key)
         logger.info(
-            "F1 CLARIFICATION RESOLVED",
+            "CLARIFICATION RESOLVED",
             session_id=session_id,
             intent_key=intent_key,
-            original_query=original_query[:80],
+            resumed_intent=frame.intent,
         )
         await self._run_pipeline(
             ws,
-            original_query,
+            frame.raw_input,
             session_id,
             client_id,
-            confirmed_intent=intent_key,
+            resumed_frame=frame,
             lang_type_override=lang_type,
-            keyword_hint=keyword_hint,
         )
 
     async def _handle_control(self, ws: WebSocket, data: dict, client_id: str):
@@ -191,6 +176,7 @@ class ChatHandler:
         session_id = data.get("session_id") or client_id
         if action == "clear_history":
             self._sessions.pop(session_id, None)
+            self._pending_clarifications.pop(session_id, None)
             await ws.send_text(json.dumps({"type": "control_ack", "action": "clear_history"}, ensure_ascii=False))
             logger.info("History cleared", session_id=session_id)
         else:
@@ -202,28 +188,25 @@ class ChatHandler:
         user_text: str,
         session_id: str,
         client_id: str,
-        confirmed_intent: Optional[str] = None,   # F1: set after user picks clarification option
-        lang_type_override: Optional[str] = None, # F1: reuse detected lang from paused query
-        keyword_hint: str = "",                   # F1: the matched keyword (e.g. "kapas") for SQL accuracy
-        force_navigation: bool = False,           # F1: set when user picked the "navigation" button
+        resumed_frame: Optional[NLUFrame] = None,  # set when resuming after clarification
+        lang_type_override: Optional[str] = None,  # reuse detected lang on resume
     ):
         """
         Full pipeline:
-          Step 1: Detect language
-          [F1]    Confirmation check — pause & ask user if intent is ambiguous
-                  (skipped when confirmed_intent is already set)
-          Step 2: Orchestrator → English answer
-          Step 3: Translate English → user language (Google Translate)
-          Step 4: Send to client
+          Step 1: Detect language (skipped on clarification resume)
+          Step 2: Stage 1 NLU → frame (skipped on resume — patched frame passed in)
+          Step 3: Ambiguous → clarification pause (only on first pass)
+          Step 4: Orchestrator → English answer
+          Step 5: Translate English → user language
+          Step 6: Send to client
         """
         pipeline_start = time.perf_counter()
         history = self._sessions.setdefault(session_id, ChatHistory(session_id=session_id))
-        # Only add user message to history on the first call (not on F1 resume)
-        if not confirmed_intent:
+        # Only add the user message to history on the first pass (not on resume).
+        if resumed_frame is None:
             history.messages.append(ChatMessage(role="user", content=user_text))
 
         # ── Step 1: Language detection ───────────────────────────────────────
-        # When resuming after F1 clarification, reuse the already-detected lang.
         if lang_type_override:
             processed_text = user_text
             lang_type      = lang_type_override
@@ -233,88 +216,55 @@ class ChatHandler:
             logger.info("LANGUAGE DETECTED", lang_type=lang_type,
                         original=user_text[:60], elapsed_ms=f"{t.elapsed_ms:.1f}ms")
 
-        # ── F1: Confirmation Layer ───────────────────────────────────────────
-        # Only runs on the FIRST pass (confirmed_intent is None).
-        # SKIPPED when SQL flow is disabled — F1 only disambiguates SQL intents.
-        # Returns one of:
-        #   ConfirmedIntent      → confidence >= 80%, inject intent and skip F1 UI
-        #   ClarificationRequest → confidence < 80%, pause and ask user
-        #   None                 → no ambiguity, proceed normally
-        _sql_enabled = settings.is_sql_enabled
-        # F1 is now ENTITY-EXTRACTION ONLY. Flow decisions are made by the
-        # route agent (single source of truth). F1 returns:
-        #   - ConfirmedIntent → entity hint; route agent still decides flow
-        #   - ClarificationRequest → ambiguous; pause and show buttons
-        #   - None → no entity detected; route agent decides everything
-        if not confirmed_intent and _sql_enabled:
-            f1_result = await self.confirmation_layer.check(processed_text)
+        # ── Step 2: Stage 1 Unified NLU ──────────────────────────────────────
+        if resumed_frame is not None:
+            frame = resumed_frame
+        else:
+            with Timer() as t:
+                frame = await self.nlu.extract(processed_text, detected_language=lang_type)
+            logger.info("STAGE1 FRAME", intent=frame.intent,
+                        qtype=frame.query_type,
+                        keyword=frame.primary_keyword()[:40],
+                        elapsed_ms=f"{t.elapsed_ms:.0f}ms")
 
-            if isinstance(f1_result, ConfirmedIntent):
-                # F1 extracted a clear entity — pass to orchestrator as hint
-                # so the route agent + entity normalizer have context.
-                logger.info(
-                    "F1 ENTITY DETECTED",
-                    intent=f1_result.intent_key,
-                    confidence=f"{f1_result.confidence:.0%}",
-                    keyword=f1_result.keyword,
-                    session_id=session_id,
-                )
-                confirmed_intent = f1_result.intent_key
-                # Carry the F1-extracted keyword forward so the orchestrator's
-                # entity normalizer can resolve it to canonical Gujarati and the
-                # SQL prompt can inject the CANONICAL / TRANSLATE KEYWORD block.
-                # Without this assignment keyword_hint stays at its default ""
-                # and the entire normalization path short-circuits.
-                if f1_result.keyword:
-                    keyword_hint = f1_result.keyword
+        # ── Step 3: Clarification (first pass only) ──────────────────────────
+        if frame.needs_clarification and resumed_frame is None:
+            if settings.is_sql_enabled:
+                clarification = build_clarification(frame)
+            else:
+                clarification = None  # SQL off → clarifying SQL domains is pointless
 
-            elif f1_result is not None:
-                # Low-confidence — pipeline paused, ask user
-                clarification = f1_result
+            if clarification is not None:
                 self._pending_clarifications[session_id] = {
-                    "query":          processed_text,
-                    "lang_type":      lang_type,
-                    "keyword_hint":   clarification.matched_keyword,
-                    "scenario":       clarification.scenario,
+                    "frame":     frame,
+                    "lang_type": lang_type,
                 }
                 logger.info(
-                    "F1 PIPELINE PAUSED",
+                    "PIPELINE PAUSED — clarification",
                     session_id=session_id,
                     scenario=clarification.scenario,
                     query=processed_text[:60],
                 )
-                payload = self.confirmation_layer.serialize_request(clarification)
-                # Translate question to user's detected language
+                payload = serialize_request(clarification)
+                # Translate question + option labels to the user's language.
                 payload["question"] = await translate_to_user_language(
                     clarification.question, lang_type
                 )
-                # Translate option labels to user's detected language
                 raw_labels = [opt["label"] for opt in payload["options"]]
                 translated_labels = await translate_list_to_user_language(raw_labels, lang_type)
                 for i, opt in enumerate(payload["options"]):
                     opt["label"] = translated_labels[i]
                 payload["timestamp"] = datetime.now().isoformat()
                 await ws.send_text(json.dumps(payload, ensure_ascii=False))
-                return  # ← pipeline paused; resumes via _handle_clarification_response
+                return  # paused; resumes via _handle_clarification_response
+            else:
+                # No buttons buildable (or SQL disabled) — degrade to general.
+                frame.intent = "general"
 
-        # ── Navigation routing ───────────────────────────────────────────────
-        # The LLM-based F1 (confirmation_layer) already returns None (skip) for
-        # all navigation queries — the route agent then classifies them correctly
-        # as NAVIGATION without any keyword override needed here.
-        # The exception is the "navigation" clarification button: when the user
-        # taps it, _handle_clarification_response calls _run_pipeline with
-        # force_navigation=True, which is honored by passing it through to the
-        # orchestrator below.
-
-        # ── Step 2: Orchestrator → English answer ────────────────────────────
+        # ── Step 4: Orchestrator → English answer ────────────────────────────
         with Timer() as t:
             try:
-                result = await self.orchestrator.process_query(
-                    processed_text,
-                    confirmed_intent=confirmed_intent,  # F1: None on first pass; set on resume
-                    keyword_hint=keyword_hint,          # F1: matched keyword for SQL targeting
-                    force_navigation=force_navigation,  # Nav signal detected — skip route agent
-                )
+                result = await self.orchestrator.process_query(frame)
                 english_answer = result.get("answer", "")
             except Exception as e:
                 logger.error_with_context(e, {"action": "orchestrator", "client": client_id})
@@ -323,13 +273,13 @@ class ChatHandler:
         logger.info("ENGLISH ANSWER READY", chars=len(english_answer),
                     flow=result.get("flow"), elapsed_ms=f"{t.elapsed_ms:.0f}ms")
 
-        # ── Step 3: Translate to user language ───────────────────────────────
+        # ── Step 5: Translate to user language ───────────────────────────────
         with Timer() as t:
             final_answer = await translate_to_user_language(english_answer, lang_type)
         logger.info("TRANSLATION DONE", lang_type=lang_type,
                     translated=(lang_type != "english"), elapsed_ms=f"{t.elapsed_ms:.0f}ms")
 
-        # ── Step 4: Send response ────────────────────────────────────────────
+        # ── Step 6: Send response ────────────────────────────────────────────
         history.messages.append(ChatMessage(role="assistant", content=final_answer))
         history.updated_at = datetime.now()
 
@@ -340,8 +290,6 @@ class ChatHandler:
         # (no-data / not-found / sql-disabled) — `query_results_filtered`
         # is absent from the orchestrator result; we fall back to the raw
         # `query_results` so `query_data` is always the canonical view.
-        # `query_data_filtered` was the old dual-shipping field — removed
-        # so the wire format stays single-shape across all flows.
         query_data = self._build_query_data(result, key="query_results_filtered")
         if not query_data:
             query_data = self._build_query_data(result, key="query_results")

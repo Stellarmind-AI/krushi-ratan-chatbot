@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     # "false" = bot only answers NAVIGATION + GENERAL + GREETING
     # "true"  = bot also queries the database for live data
     # To enable later: set ENABLE_SQL_FLOW=true in .env and restart
-    ENABLE_SQL_FLOW: str = Field(default="false", description="Enable SQL database query flow (true/false)")
+    ENABLE_SQL_FLOW: str = Field(default="true", description="Enable SQL database query flow (true/false)")
     
     # ================================
     # RATE LIMITING CONFIGURATION
