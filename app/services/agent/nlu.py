@@ -42,36 +42,83 @@ R2. NEVER INVENT — null/absent for anything not in the message. Especially con
 R3. question_en — one clean English sentence with the same meaning (keep numbers and ids; entity words may be translated here — this field is for reading, not for matching).
 R4. Output only NON-EMPTY fields. "intent", "question_en", "query_type" are ALWAYS required. Omit empty arrays/null fields.
 
-═══════════════ INTENT (exactly one) ═══════════════
-crop_price       — crop/mandi prices, rates, price lists (incl. category-level: "શાકભાજી ના ભાવ")
-equipment_kshop  — NEW equipment: word new/નવું/नया/નવી or "from company" present
-equipment_used   — USED equipment: used/જૂનું/जुना/second hand/old present
-kshop_product    — K-Shop catalog questions without an equipment item or condition (categories, companies, discounts) or explicit "kshop"
-buy_sell_product — Buy/Sell listings: animals (ગાય/ભેંસ/ઘોડો/ઘેટા/બકરા/સાંઢ…), listing ids, ads, "for sale" items
-seed_info        — seeds/varieties (બીજ/बीज/seed word present)
-news             — news/સમાચાર/खबर/ખબર (schemes, weather alerts, by region)
-video            — wants a LIST of farming videos ("show videos about X", "cotton farming videos")
-greeting         — pure greeting/small talk, no real question (રામ રામ, jay shree krishna, "is anyone there?")
-general          — static app info: what is the app, is it free, who made it, contact/office, troubleshooting, policies, weight units, documents needed
-navigation       — wants STEPS to do something in the app (sell/buy/register/upload/change settings) OR asks WHERE a screen/page/section is
-ambiguous        — genuinely cannot decide (see AMBIGUITY)
+═══════════════ HOW TO DECIDE THE INTENT (by MEANING, never by keyword) ═══════════════
+Decide from the user's GOAL, not the words they used. Two questions settle it:
 
-═══════════════ CORE ROUTING RULE ═══════════════
-If the user wants to SEE/KNOW information that lives in the database (prices, listings, counts, news, availability, "do you have X") → that data intent, REGARDLESS of phrasing ("show me", "can I see", "where can I find", "do you have", "છે કોઈ?").
-NAVIGATION only when they want the PROCESS/steps to DO something, or ask where a page/screen is.
+(1) Does the user want INFORMATION or a PROCESS?
+    • INFORMATION / DATA = prices, listings, counts, news, "do you have X", or simply
+      naming / wanting / needing an item. ALL of these phrasings mean the SAME goal —
+      "show me info about this item": want, need, buy, get, જોઈ છે, જોઈએ, લેવી છે,
+      ખરીદવી, મંગાવવી, चाहिए, खरीदना, "show me", "do you have", "મળશે?", "છે કોઈ?".
+      Treat them identically across Gujarati / Hindi / English / dialect. → a DATA intent.
+    • PROCESS = the user asks HOW to do something, WHERE a screen/feature is, or wants to
+      perform an action in the app (sell/list their own item, upload, register, pay,
+      change a setting, "steps to…", "કેવી રીતે…", "ક્યાં જઈને…"). → navigation.
+    The verb alone never decides this. "I want to buy wheat" wants wheat INFO (price) → DATA.
+    "How do I sell my wheat" asks a PROCESS → navigation.
 
-DECIDED POLICIES (always apply):
-P1. "where can I watch X video / which page has X video / open that video page" → navigation (guide to videos screen). BUT "show me videos about X" / "X ના વિડિઓ બતાવો" → video.
-P2. buy/sell verb + PRICE question → the price wins: "મારે ઘઉં ખરીદવા છે, કેટલામાં પડશે?" → crop_price. Buy/sell verb alone → crop_buy / crop_sell / navigation.
-P3. "I want to sell my X (animal/equipment), where do I upload/post?" → navigation (sell process).
-P4. Asking a listing owner's phone/contact → buy_sell_product (+ identifier if given). Never refuse here — privacy is handled later.
-P5. Greeting + real question → classify the real question, not the greeting.
+(2) Which DOMAIN is the item?  (this picks WHICH data intent)
+    • CROP — grain / vegetable / fruit / spice / oilseed / pulse (ઘઉં, મગફળી, કપાસ, ટામેટા,
+      ડુંગળી, બાજરી, શાકભાજી, કઠોળ…). Crops carry mandi PRICE info.
+    • ANIMAL — ગાય, ભેંસ, ઘોડો, ઘેટા, બકરા, સાંઢ, ઊંટ, ગધેડો… (only in Buy/Sell).
+    • EQUIPMENT — farm machinery/tools (ટ્રેક્ટર, થ્રેશર, પંપ, સ્પ્રેયર, સીડર…). NEW = K-Shop,
+      USED = Buy/Sell.
+    • Else: SEED, NEWS, VIDEO, or app/general.
+
+═══════════════ INTENTS (pick exactly one) ═══════════════
+crop_price       — wants INFO about a crop: its price/rate/availability, a list of crops, or
+                   simply names / wants / needs / wants-to-buy a crop. Any desire to GET a crop
+                   is an info request → here (show its mandi price). ALSO owns the marketplace
+                   GEOGRAPHY — mandis/yards, cities, talukas, states: any count/list/lookup of
+                   them ("how many yards", "કેટલા તાલુકા", "which yards in Rajkot", "how many
+                   cities does the app cover") → crop_price.
+crop_sell        — wants to SELL their OWN crop/produce ("I have to sell my X", "how do I sell
+                   my crop") → guide them (a process).
+equipment_kshop  — wants a NEW piece of equipment, or its price (new / from company / brand).
+equipment_used   — wants a USED / second-hand / cheap / old piece of equipment, or its price.
+kshop_product    — K-Shop catalog as a whole (its categories, companies, discounts) with no
+                   single equipment item or condition named, or explicit "kshop".
+buy_sell_product — wants Buy/Sell listings: an ANIMAL, or a specific listing/ad/owner-contact.
+seed_info        — wants seed / variety information.
+news             — wants agricultural news (schemes, weather alerts, by region/topic).
+video            — wants a LIST of farming videos on a topic.
+greeting         — pure greeting / small talk, no real question.
+general          — wants static app info (what the app is, is it free, who made it,
+                   contact/office, policies, units, troubleshooting).
+navigation       — wants to KNOW HOW to do something, or WHERE a screen/feature is
+                   (sell/list/register/upload/pay/change settings, "how do I…", "where is…").
+ambiguous        — a required choice is genuinely missing (see AMBIGUITY).
+
+DOMAIN GUARDRAILS (never break — these prevent the common mis-routes):
+• A CROP → crop_price (info) or crop_sell (selling own produce). A crop is NEVER
+  buy_sell_product and NEVER equipment.
+• An ANIMAL → buy_sell_product (animals live only in Buy/Sell). Bare animal is NOT ambiguous.
+• EQUIPMENT → new → equipment_kshop, used → equipment_used, condition NOT stated → ambiguous
+  (must ask new vs used; a want/need word does NOT resolve it).
+• COUNTING IS DATA (universal): a "how many / કેટલા / कितने / total / કુલ" question about ANYTHING
+  the app stores is live DB data. Route it to the SAME data intent that owns that thing for a
+  normal question (apply question (2)/DOMAIN above), just with query_type=count. A count is NEVER
+  general. ("general" = static facts about the app ITSELF: is it free, who made it, contact.)
+
+═══════════════ POLICIES ═══════════════
+P1. Video: "where can I WATCH X / which page has X video / open that video page" → navigation
+    (guide to the videos screen). "show me videos about X" / "X ના વિડિઓ બતાવો" → video.
+P2. SEE-vs-DO for "where do I click/go" questions: wanting to SEE existing listings/data → the
+    data intent (even with "where/click"). Wanting to PERFORM a transaction (place order, list,
+    upload, post, sell MY item) → navigation.
+P3. A listing owner's phone/contact → buy_sell_product (+ identifier if given). Never refuse —
+    privacy is handled later.
+P4. Greeting + a real question → classify the real question, not the greeting.
 
 ═══════════════ QUERY TYPE ═══════════════
-specific_search — names a specific item/variety/location/id
-list_all        — asks what exists / show all / category-level browse with NO specific item ("list all crops", "કયા પાક છે", "શાકભાજી ના ભાવ" with no specific crop, or only generic words: crop/પાક/product/videos)
-count           — wants a NUMBER: how many/કેટલા/ketla/कितने/total/કુલ
-general_knowledge — greeting/general/navigation (no DB data needed)
+specific_search — names a SPECIFIC item / variety / location / id to look up.
+list_all        — wants the whole set / "what exists", with NO specific item named. This INCLUDES
+                  a bare GENERIC domain word — "I want animals", "પ્રાણી જોઈ છે", "show crops",
+                  "કયા પાક છે", "what equipment do you have" — the word is the category itself, not
+                  a search term, so the answer is a LIST of everything in that domain. (Stage 3
+                  will list/browse — it must NOT keyword-filter on the generic word.)
+count           — wants a NUMBER: how many / કેટલા / ketla / कितने / total / કુલ.
+general_knowledge — greeting / general / navigation / crop_sell (no DB rows needed).
 
 ═══════════════ FLAGS ═══════════════
 is_price_query        — true when the user asks a price/rate (ભાવ/કિંમત/भाव/कीमत/price/rate/કેટલામાં પડશે)
@@ -94,10 +141,20 @@ price_above/price_below: number ("1500 થી ઉપર" → price_above 1500)
 date: "today"|"this_week"|"this_month"|"latest" (આજ/आज=today; નવો ભાવ/છેલ્લી=latest; ચાલુ મહીને=this_month)
 sort: "cheapest"|"most_expensive"|"newest" ; group_by: "yard"|"taluka"|"city" ("કિયા યાર્ડમાં સસ્તો"→group_by yard)
 
-═══════════════ AMBIGUITY (use sparingly!) ═══════════════
-intent "ambiguous" + ambiguity_scenario ONLY when a required choice is truly missing:
-  crop (bare crop name, nothing else) | equipment (equipment, no new/used/price) | equipment_price (equipment + price, no new/used) | animal (bare animal) | seed | product (generic "products") | price (price word alone) | location (bare place name)
-NOT ambiguous: any price/list/count/availability word present → decide the intent. "new seeder price" → equipment_kshop (condition given). "second hand tractor" → equipment_used. Animal + price/listing word → buy_sell_product.
+═══════════════ AMBIGUITY (use sparingly — only a genuinely missing CHOICE) ═══════════════
+intent "ambiguous" + ambiguity_scenario ONLY when the user MUST pick something to proceed:
+  equipment       — an EQUIPMENT item with no new/used signal. The new-vs-used choice changes
+                    WHERE we look (K-Shop vs Buy/Sell), so it must be asked. A want/need/show/
+                    availability word does NOT resolve it — only explicit new OR used/second-hand/
+                    cheap/old does.
+  equipment_price — equipment + a price question but still no new/used → ask new vs used.
+  product         — a generic "product / item / વસ્તુ" with no domain at all → ask which section.
+  seed | price | location — a bare "seed" word / bare price word / bare place name with nothing else.
+NOT ambiguous (route directly — do NOT ask):
+  • A bare CROP ("કપાસ", "ઘઉં") → crop_price (show its price).
+  • A bare or generic ANIMAL ("ગાય", "પ્રાણી") → buy_sell_product.
+  • Equipment WITH a new/used/cheap signal → equipment_kshop or equipment_used.
+  • Anything with a price / list / count / availability goal → decide the data intent.
 
 ═══════════════ EXAMPLES ═══════════════
 "ભાવનગર શેરના યાર્ડમાં આજ શીંગ મગડીનો ઊંચામાં ઊંચો ભાવ હું પડ્યો સે?"
@@ -115,8 +172,26 @@ NOT ambiguous: any price/list/count/availability word present → decide the int
 "મને ઘઉં ખરીદવો છે તો કેટલામાં પડશે?"
 → {"intent":"crop_price","question_en":"I want to buy wheat — how much will it cost?","query_type":"specific_search","crops":[{"name":"ઘઉં"}],"is_price_query":true}
 
+[wanting a crop = info request → crop_price, regardless of the verb or language:]
+"મારે મગફળી ખરીદવી છે"
+→ {"intent":"crop_price","question_en":"I want to buy groundnut.","query_type":"specific_search","crops":[{"name":"મગફળી"}]}
+"મારે ટામેટા જોઈ છે"
+→ {"intent":"crop_price","question_en":"I want tomatoes.","query_type":"specific_search","crops":[{"name":"ટામેટા"}]}
+"मुझे प्याज खरीदना है"
+→ {"intent":"crop_price","question_en":"I want to buy onions.","query_type":"specific_search","crops":[{"name":"प्याज"}]}
+
+[selling OWN produce / how-to = a process → crop_sell:]
+"મારે મારો ઘઉં વેચવો છે, ક્યાં મુકું?"
+→ {"intent":"crop_sell","question_en":"I want to sell my wheat — where do I list it?","query_type":"general_knowledge","crops":[{"name":"ઘઉં"}]}
+
 "મારે મારો જૂનો સાંઢો અને ટ્રેક્ટર વેચવા સે, ચોં ફોટો પાડીને મુકવો?"
 → {"intent":"navigation","question_en":"I want to sell my old bull and tractor — where do I upload the photos to list them?","query_type":"general_knowledge"}
+
+"I want to see the listings of other buffaloes and cows available for purchase, where do I click?"
+→ {"intent":"buy_sell_product","question_en":"I want to see buffalo and cow listings available for purchase — where do I click?","query_type":"specific_search","animals":["ભેંસ","ગાય"],"is_availability_query":true}
+
+"I want to buy a new seed drill from the company, which section do I visit to place the order?"
+→ {"intent":"navigation","question_en":"I want to buy a new seed drill from the company — which section do I visit to place the order?","query_type":"general_knowledge"}
 
 "પેલો એક્સપોર્ટ વાળો વિડીયો ચોં જોવા મળશે?"
 → {"intent":"navigation","question_en":"Where can I watch the video about export in the app?","query_type":"general_knowledge"}
@@ -130,11 +205,27 @@ NOT ambiguous: any price/list/count/availability word present → decide the int
 "જુનું થ્રેશર વેચવા વાળું કોઈ સે નજીકમાં? "
 → {"intent":"equipment_used","question_en":"Is anyone nearby selling a used thresher?","query_type":"specific_search","equipment":[{"name":"થ્રેશર","condition":"used"}],"is_availability_query":true}
 
+[equipment with NO new/used signal — "want/need" does NOT resolve it → clarify:]
+"મને થ્રેશર જોઈ છે"
+→ {"intent":"ambiguous","intent_confidence":"low","ambiguity_scenario":"equipment","question_en":"I need a thresher.","query_type":"specific_search","equipment":[{"name":"થ્રેશર"}]}
+
+[generic domain word (no specific item) → list the whole domain, not a keyword search:]
+"મારે પ્રાણી જોઈ છે"
+→ {"intent":"buy_sell_product","question_en":"I want to see animals available.","query_type":"list_all"}
+"i want to buy animals"
+→ {"intent":"buy_sell_product","question_en":"I want to buy animals.","query_type":"list_all"}
+
 "ટ્રેક્ટર - 1778741216208 આ આઈડી વાળા માલિકનો નંબર હું સે?"
 → {"intent":"buy_sell_product","question_en":"What is the phone number of the owner of listing id Tractor - 1778741216208?","query_type":"specific_search","equipment":[{"name":"ટ્રેક્ટર"}],"identifier":"1778741216208"}
 
 "ketla product category che buy sell ma?"
 → {"intent":"buy_sell_product","question_en":"How many product categories are there in Buy/Sell?","query_type":"count"}
+
+[a count routes by the entity's domain, never to general:]
+"ભાવનગરમાં કેટલા તાલુકા છે?"
+→ {"intent":"crop_price","question_en":"How many talukas are there in Bhavnagar?","query_type":"count","locations":[{"name":"ભાવનગર"}]}
+"how many videos are on the app"
+→ {"intent":"video","question_en":"How many videos are on the app?","query_type":"count"}
 
 "ભાવનગર ગારીયાધાર પંથકમાં અતિવૃષ્ટિ કે વાવાઝોડાની કોઈ ન્યૂઝ મુકાણી સે આજે?"
 → {"intent":"news","question_en":"Is there any news about heavy rain or cyclone for the Bhavnagar Gariadhar region today?","query_type":"specific_search","locations":[{"name":"ભાવનગર"},{"name":"ગારીયાધાર"}],"news":{"topics":["અતિવૃષ્ટિ","વાવાઝોડા"]},"constraints":{"date":"today"}}
