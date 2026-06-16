@@ -361,26 +361,32 @@ async def _groq_json_call(client: AsyncGroq, prompt: str, max_tokens: int):
 async def call_groq_for_batch(
     client: AsyncGroq, batch: List[str]
 ) -> Dict[str, List[str]]:
-    """Single Groq call for one batch. Returns the parsed dict or {} on failure."""
+    """Generate synonyms for one batch, with ADAPTIVE SPLITTING.
+
+    A batch can exceed the model's output-token limit (Groq returns
+    400 json_validate_failed "max completion tokens reached") when it has many
+    values or long multi-word names (e.g. states like "મધ્ય પ્રદેશ"). Re-trying
+    the same-size batch just fails again. Instead, on ANY failure we SPLIT the
+    batch in half and recurse — down to a single value — so every value is
+    eventually generated. This guarantees no table is left with empty synonyms.
+    """
     prompt = SYNONYM_PROMPT_TEMPLATE.format(
         values_json=json.dumps(batch, ensure_ascii=False)
     )
     try:
-        # ~12-15 variants per value × 20 values per batch + JSON structure
-        # ≈ 1500-2000 tokens of output. 3500 gives safe headroom against
-        # the LLM elaborating slightly, without burning the rate limit.
         response = await _groq_json_call(client, prompt, max_tokens=3500)
-    except Exception as e:
-        print(f"      ⚠ Groq call failed: {e}")
-        return {}
-
-    content = (response.choices[0].message.content or "").strip()
-    try:
+        content = (response.choices[0].message.content or "").strip()
         parsed = json.loads(content)
-    except json.JSONDecodeError as e:
-        print(f"      ⚠ JSON parse failed: {e}")
-        return {}
-    if not isinstance(parsed, dict):
+        if not isinstance(parsed, dict):
+            raise ValueError("response was not a JSON object")
+    except Exception as e:
+        if len(batch) > 1:
+            mid = len(batch) // 2
+            print(f"      ↪ batch of {len(batch)} failed ({str(e)[:60]}) — splitting")
+            left = await call_groq_for_batch(client, batch[:mid])
+            right = await call_groq_for_batch(client, batch[mid:])
+            return {**left, **right}
+        print(f"      ⚠ single value failed permanently: {batch[0]!r} — {str(e)[:80]}")
         return {}
 
     cleaned: Dict[str, List[str]] = {}
