@@ -27,10 +27,11 @@ from app.services.agent.answer_generator import get_answer_generator
 from app.services.agent.knowledge_handler import get_knowledge_handler
 from app.services.agent.status_filter     import filter_query_results
 from app.services.agent.clarification     import get_confirmed_tables, get_intent_note
+from app.services.agent.resolver          import get_resolver, ResolvedFrame
+from app.services.agent.sql_builder       import build_sql
 from app.models.nlu_frame                 import NLUFrame
 from app.services.database.query_executor import get_query_executor
 from app.services.database.query_validator import query_validator
-from app.services.entity_normalizer       import get_entity_normalizer
 from app.utils.schema_generator        import SchemaGenerator
 from app.utils.privacy_policy          import get_privacy_policy
 from app.services.llm.manager          import get_llm_manager
@@ -59,10 +60,9 @@ class Orchestrator:
         self.query_executor    = get_query_executor()
         self.llm_manager       = get_llm_manager()
         self.privacy_policy    = get_privacy_policy()
-        # Eagerly load the entity catalog at server startup so the "📚
-        # EntityNormalizer loaded" log appears on boot — and so the first
-        # query doesn't pay the JSON-load latency.
-        self.entity_normalizer = get_entity_normalizer()
+        # Eagerly load the v2 entity catalog at startup so the first query
+        # doesn't pay the JSON-load latency (Stage 2 resolver).
+        self.resolver          = get_resolver()
 
         # Schema data
         self.condensed_schema: dict = {}
@@ -218,6 +218,7 @@ class Orchestrator:
                             f"legacy_key={legacy_key} keyword={keyword!r}")
                 result = await self._flow_sql(
                     question_en,
+                    frame=frame,
                     confirmed_intent=legacy_key,
                     keyword_hint=keyword,
                 )
@@ -306,216 +307,108 @@ class Orchestrator:
 
     # ── Flow: SQL ───────────────────────────────────────────────────────────────
 
-    async def _flow_sql(self, query: str, confirmed_intent: Optional[str] = None, keyword_hint: str = "") -> Dict[str, Any]:
+    async def _flow_sql(self, query: str, frame: Optional[NLUFrame] = None,
+                        confirmed_intent: Optional[str] = None, keyword_hint: str = "") -> Dict[str, Any]:
         """
-        Full SQL pipeline with cache + intent routing optimizations.
+        Full SQL pipeline.
 
-        STEP 2: Cache check   → skip all LLM if SQL cached
-        STEP 3: Intent route  → skip tool-selection LLM for obvious queries
-        STEP 4: Tool selection (LLM #1, only if intent routing missed)
-        STEP 5: SQL generation (LLM #2, compact schema)
-        STEP 6: Execute SQL   (pure MySQL, no LLM)
-        STEP 7: Answer gen    (LLM #3, English answer only)
+        STEP 2: Cache check        → skip all LLM if SQL cached
+        STEP 2b: Stage 2 resolution → catalog → canonical Gujarati + row ids
+        STEP 5: SQL generation     (LLM, compact schema + resolved entities)
+        STEP 6: Execute SQL        (pure MySQL, no LLM)
+        STEP 7: Answer gen         (LLM, English answer only)
 
-        confirmed_intent — when set (F1 Confirmation Layer resolved ambiguity),
-        Steps 3 and 4 are skipped entirely and the pre-resolved table list is
-        used directly.  This is the only change F1 makes to this method.
+        confirmed_intent — legacy intent key from the frame; selects the table set.
+        frame             — the NLUFrame; drives Stage 2 multi-entity resolution.
         """
 
-        # ── Frame intent shortcut (Steps 3 & 4 bypassed) ────────────────────
+        # ── Table set from the confirmed intent ─────────────────────────────
         f1_injected_tools: Optional[list] = None
-        intent_note: str = ""   # always defined; set when confirmed_intent present
+        intent_note: str = ""
         if confirmed_intent:
             f1_injected_tools = get_confirmed_tables(confirmed_intent)
             f1_injected_tools = self.privacy_policy.filter_tool_names(f1_injected_tools)
             intent_note       = get_intent_note(confirmed_intent)
             if f1_injected_tools:
                 logger.info(
-                    f"🎯 F1 confirmed intent='{confirmed_intent}' → "
+                    f"🎯 intent='{confirmed_intent}' → "
                     f"tables={f1_injected_tools} | note='{intent_note[:60]}'"
                 )
             else:
                 logger.warning(
-                    f"⚠️ F1 confirmed_intent='{confirmed_intent}' returned no tables — "
+                    f"⚠️ intent='{confirmed_intent}' returned no tables — "
                     f"falling through to normal tool selection"
                 )
 
-        # ── Entity normalization (intent + keyword → canonical Gujarati) ────
-        # Runs BEFORE SQL generation so the prompt can inject the exact
-        # Gujarati value the DB stores, eliminating LLM hallucination of
-        # English/Hindi/Romanized LIKE variants.
+        # ── STEP 2b: Stage 2 — entity resolution (catalog, no LLM) ──────────
+        # Resolves EVERY frame entity to the exact Gujarati value(s) + row ids
+        # the DB stores. The resolved block is injected into SQL generation so
+        # the LLM never translates keywords itself (kills English/Hindi/
+        # Romanized LIKE hallucination and the single-keyword drop).
         gujarati_keyword: str = ""
-        if confirmed_intent and keyword_hint:
-            resolved = self.entity_normalizer.normalize(confirmed_intent, keyword_hint)
-            if resolved:
-                gujarati_keyword = resolved
-                logger.info(
-                    f"🔤 normalize({confirmed_intent}, {keyword_hint!r}) → "
-                    f"canonical={gujarati_keyword!r}"
-                )
-            else:
-                logger.info(
-                    f"🔤 normalize({confirmed_intent}, {keyword_hint!r}) → no match — "
-                    f"SQL prompt will translate to Gujarati"
-                )
+        resolved_block: str = ""
+        disclosures: List[str] = []
+        if frame is not None:
+            resolved = self.resolver.resolve_frame(frame)
 
-        # ── STEP 2: Cache check ─────────────────────────────────────────────
-        logger.step("STEP 2 / CACHE CHECK", query[:60])
-        cached = self.query_cache.get(query)
-        if cached:
-            queries, selected_tools = cached
-            selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
-            all_valid, validation_errors = query_validator.validate_batch([q.get("sql", "") for q in queries])
-            if not selected_tools or not all_valid:
-                logger.warning(
-                    f"Privacy policy rejected cached SQL; invalidating cache | "
-                    f"errors={validation_errors}"
-                )
-                self.query_cache.invalidate(query)
-                cached = None
+            # did-you-mean: only when the user named a SPECIFIC item and every
+            # subject failed to resolve (generic-word / list / count queries
+            # never dead-end here — they have no specific subject).
+            if frame.query_type == "specific_search":
+                subjects = resolved.subject_entities()
+                if subjects and all(not s.resolved for s in subjects):
+                    cands = []
+                    for s in subjects:
+                        cands.extend(s.candidates)
+                    logger.info(f"🔎 Stage2 ALL subjects unresolved → did-you-mean "
+                                f"surface={subjects[0].surface!r} cands={cands[:3]}")
+                    return self._did_you_mean_response(subjects[0].surface, cands)
 
-        if cached:
-            logger.cache_hit(query, selected_tools)
-            stats = self.query_cache.stats
-            logger.info(f"📊 Cache: {stats['hit_rate_percent']}% hit rate | "
-                        f"${stats['cost_saved_usd']} saved | "
-                        f"{stats['tokens_saved_estimate']} tokens saved")
+            disclosures = resolved.disclosures
+            logger.info(f"🔤 Stage2 resolved | disclosures={disclosures}")
 
-            with Timer() as t:
-                query_results = await self.query_executor.execute_parallel(queries)
-            logger.step_done("STEP 2 / CACHE HIT EXECUTE", t.elapsed_ms,
-                             results=len(query_results))
+        selected_tools = f1_injected_tools or []
 
-            specific = [r for r in query_results if r.row_count > 0 and self._is_specific(r)]
-            if not specific:
-                return self._no_data_response(selected_tools, query_results)
+        # ── STEP 3: Deterministic SQL build (Stage 3 — NO LLM) ──────────────
+        # The frame (intent + resolved ids + constraints + query_type) is
+        # compiled to SQL by composition. No tool-selection LLM, no SQL LLM,
+        # no exploratory heuristics — every clause is derived from the frame.
+        if frame is None:
+            logger.warning("SQL flow reached without a frame — cannot build")
+            return self._out_of_scope_response()
 
-            return await self._generate_english_answer(query, specific, selected_tools,
-                                                        cache_hit=True)
-
-        logger.cache_miss(query)
-
-        # ── STEP 3: Intent routing (zero-LLM table selection) ───────────────
-        # Skip if F1 already resolved the intent.
-        if f1_injected_tools:
-            selected_tools = f1_injected_tools
-            logger.step(
-                "STEP 3 / INTENT ROUTER",
-                "SKIPPED — F1 confirmed intent already resolved tables",
-            )
-            logger.step_done("STEP 3 / INTENT ROUTER", 0, result="f1_bypass")
-        else:
-            logger.step("STEP 3 / INTENT ROUTER", query[:60])
-            with Timer() as t:
-                routed = self.intent_router.route(query)
-            if routed:
-                selected_tools, rule_name = routed
-                selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
-                logger.intent_routed(rule_name, selected_tools)
-                logger.step_done("STEP 3 / INTENT ROUTER", t.elapsed_ms,
-                                 rule=rule_name, tables=str(selected_tools))
-            else:
-                logger.step_done("STEP 3 / INTENT ROUTER", t.elapsed_ms, result="ambiguous")
-                selected_tools = None
-
-        # ── STEP 4: LLM Tool Selection (only if intent routing missed) ───────
-        # Also skip if F1 already resolved the intent.
-        if not selected_tools:
-            logger.step("STEP 4 / TOOL SELECTION (LLM #1)", query[:60])
-            available = self.schema_generator.get_available_tool_names()
-            if not available and self._virtual_tools:
-                available = [f"query_{t}" for t in sorted(self._virtual_tools.keys())]
-            available = self.privacy_policy.filter_tool_names(available)
-
-            with Timer() as t:
-                tool_resp = await self.tool_selector.select_tools(
-                    user_query=query,
-                    condensed_schema=self.condensed_schema,
-                    available_tools=available,
-                )
-            selected_tools = tool_resp.selected_tools
-            selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
-            logger.step_done("STEP 4 / TOOL SELECTION", t.elapsed_ms,
-                             tools=str(selected_tools))
-            logger.tool_selection(selected_tools, query)
-
-            if not selected_tools:
-                logger.warning("Tool selection returned nothing — relaxed retry")
-                with Timer() as t2:
-                    selected_tools = await self._select_tools_relaxed(query, available)
-                    selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
-                logger.step_done("STEP 4 / TOOL SELECTION RELAXED", t2.elapsed_ms,
-                                 tools=str(selected_tools))
-                if not selected_tools:
-                    logger.no_data_found("SQL", query)
-                    return self._out_of_scope_response()
-
-        # ── STEP 5: SQL Generation (LLM #2) OR Exploratory Fallback ──────
-        # Exploratory detection: strip all known filler/intent words AND domain
-        # words derived from the selected table names. If nothing meaningful
-        # remains (e.g. "what is kshop?", "what is buy sell?") → user is asking
-        # a general "what is this?" question, not searching for a specific item.
-        # In that case: skip the LLM entirely and generate a simple recent-records
-        # fallback query for the primary table. No LLM call = no hallucinated filter.
-        if self._is_exploratory_query(query, selected_tools):
-            primary_table = selected_tools[0].replace("query_", "")
-            compiled      = self._compiled_schemas.get(primary_table, "")
-            fallback_q    = self._build_exploratory_sql(primary_table, compiled)
-            queries       = [fallback_q]
-            logger.info(
-                f"🔍 EXPLORATORY QUERY DETECTED | skipped LLM SQL | "
-                f"fallback table={primary_table} | sql={fallback_q['sql'][:80]}"
-            )
-        else:
-            logger.step("STEP 5 / SQL GENERATION (LLM #2)", f"tables={selected_tools}")
-            with Timer() as t:
-                queries = await self._generate_sql_compact(
-                    query, selected_tools,
-                    keyword_hint=keyword_hint,
-                    intent_note=intent_note,
-                    gujarati_keyword=gujarati_keyword,
-                )
-            logger.step_done("STEP 5 / SQL GENERATION", t.elapsed_ms,
-                             queries_count=len(queries))
-
-            if not queries:
-                logger.warning("SQL generation returned no queries")
-                return self._out_of_scope_response()
-
+        logger.step("STEP 3 / SQL BUILD (deterministic)",
+                    f"intent={frame.intent} qtype={frame.query_type}")
+        with Timer() as t:
+            queries = build_sql(frame, resolved)
+        logger.step_done("STEP 3 / SQL BUILD", t.elapsed_ms, queries=len(queries))
+        if not queries:
+            logger.no_data_found("SQL", query)
+            return self._out_of_scope_response()
         for q in queries:
             logger.sql_generation(q.get("sql", ""), q.get("table_name", ""))
 
-        # ── STEP 6: Execute SQL ──────────────────────────────────────────────
-        logger.step("STEP 6 / SQL EXECUTION", f"{len(queries)} queries")
+        # ── STEP 4: Execute SQL ──────────────────────────────────────────────
+        logger.step("STEP 4 / SQL EXECUTION", f"{len(queries)} queries")
         with Timer() as t:
             query_results = await self.query_executor.execute_parallel(queries)
         for r in query_results:
             logger.sql_execution_done(r.table_name, r.row_count, r.execution_time * 1000)
-        logger.step_done("STEP 6 / SQL EXECUTION", t.elapsed_ms,
+        logger.step_done("STEP 4 / SQL EXECUTION", t.elapsed_ms,
                          total_rows=sum(r.row_count for r in query_results))
 
-        # Filter: specific (has WHERE) vs broad
-        specific = [r for r in query_results if r.row_count > 0 and self._is_specific(r)]
         any_rows = [r for r in query_results if r.row_count > 0]
-
         if not any_rows:
             logger.no_data_found("SQL", query)
             return self._no_data_response(selected_tools, query_results)
 
-        if not specific and any_rows:
-            logger.warning("Specific query returned 0 rows — item likely not in DB")
-            return self._not_found_response(selected_tools, query_results)
-
-        # Cache for future identical questions
-        self.query_cache.set(query, queries, selected_tools)
-        logger.info(f"💾 Query cached for future use | key={query[:50]}")
-
-        # ── STEP 7: English Answer Generation (LLM #3) ──────────────────────
+        # ── STEP 5: English Answer Generation (LLM) ─────────────────────────
         return await self._generate_english_answer(
-            query, specific, selected_tools,
+            query, any_rows, selected_tools,
             cache_hit=False,
             intent_note=intent_note,
             keyword_hint=keyword_hint,
+            disclosures=disclosures,
         )
 
     # ── Step 7: Answer generator ────────────────────────────────────────────────
@@ -528,6 +421,7 @@ class Orchestrator:
         cache_hit: bool = False,
         intent_note: str = "",
         keyword_hint: str = "",
+        disclosures: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         LLM call #3 — generate ENGLISH answer from DB rows.
@@ -566,15 +460,92 @@ class Orchestrator:
             )
         logger.step_done("STEP 7b / ANSWER GENERATION", t.elapsed_ms,
                          chars=len(answer_resp.answer))
-        logger.final_answer(answer_resp.answer, lang="en")
+
+        # Two-threshold disclosure: when a fuzzy/dialect spelling was corrected
+        # to a different canonical (e.g. મૂંગફળી → મગફળી), tell the user what we
+        # searched for. Prepended in English so it flows through translation.
+        final = answer_resp.answer
+        if disclosures:
+            shown = ", ".join(disclosures)
+            final = f"(Showing results for: {shown})\n{final}"
+        logger.final_answer(final, lang="en")
 
         return {
-            "answer":                 answer_resp.answer,
+            "answer":                 final,
             "sources":                answer_resp.sources,
             "query_results":          query_results,          # raw — all rows from DB
             "query_results_filtered": filtered_results,       # post-status-filter — what LLM saw
             "selected_tools":         selected_tools,
             "cache_hit":              cache_hit,
+        }
+
+    # ── Stage 2 helpers ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_resolved_block(resolved: ResolvedFrame) -> tuple:
+        """Render the Stage-2 resolution into a prompt block of exact Gujarati
+        values for the SQL generator, plus the primary keyword (back-compat).
+
+        Phase 2 feeds canonical NAMES (the existing generator is LIKE-based).
+        Row ids are carried on the ResolvedFrame for Phase 3's ID-based WHERE.
+        """
+        lines: List[str] = []
+
+        def add(kind: str, entities, suffix=""):
+            for e in entities:
+                if not e.resolved:
+                    continue
+                vals = " | ".join(e.canonicals) if e.canonicals else e.canonical
+                lines.append(f"  • {kind}: {vals}{suffix}")
+
+        add("crop (sub_categories.name)", resolved.crops)
+        add("crop CATEGORY (categories.name — filter via category subquery)", resolved.categories)
+        for e in resolved.locations:
+            if e.resolved:
+                lines.append(f"  • location ({e.table}.name): {e.canonical}")
+        add("equipment category", resolved.equipment)
+        add("animal category", resolved.animals)
+        add("news type (news.news_type)", resolved.news_types)
+
+        if not lines:
+            return "", ""
+
+        block = (
+            "\nRESOLVED ENTITIES (catalog-verified — use these EXACT Gujarati values "
+            "VERBATIM in LIKE clauses; translate NOTHING, add no variants):\n"
+            + "\n".join(lines) + "\n"
+            "  When an entity lists multiple values (a|b), match ANY with OR.\n"
+        )
+        # Primary keyword for back-compat with downstream logging.
+        primary = ""
+        for grp in (resolved.crops, resolved.equipment, resolved.animals,
+                    resolved.categories, resolved.news_types):
+            for e in grp:
+                if e.resolved:
+                    primary = e.canonical
+                    break
+            if primary:
+                break
+        return block, primary
+
+    def _did_you_mean_response(self, surface: str, candidates: List[str]) -> Dict[str, Any]:
+        """Terminal response when a specifically-named item resolved to nothing.
+        Offers the closest catalog candidates (stateless — the frontend re-sends
+        the corrected term as a fresh query)."""
+        if candidates:
+            opts = ", ".join(candidates[:3])
+            answer = (
+                f"I couldn't find '{surface}' in Krushi Ratn. "
+                f"Did you mean: {opts}? Please try again with one of these."
+            )
+        else:
+            answer = (
+                f"I couldn't find '{surface}' in Krushi Ratn. "
+                f"It may not be listed yet — please try a different name."
+            )
+        return {
+            "answer": answer, "sources": [], "query_results": [],
+            "selected_tools": [], "did_you_mean": candidates[:3],
         }
 
     # ── SQL helpers ─────────────────────────────────────────────────────────────
@@ -586,6 +557,7 @@ class Orchestrator:
         keyword_hint: str = "",
         intent_note: str = "",
         gujarati_keyword: str = "",
+        resolved_block: str = "",
     ) -> List[Dict]:
         """Generate SQL using pre-compiled compact schemas. ~60% fewer tokens than full schema."""
         available = set(self.privacy_policy.filter_tool_names(self.schema_generator.get_available_tool_names()))
@@ -648,7 +620,12 @@ class Orchestrator:
         # the generated SQL contains Gujarati script only — no English,
         # Romanized, or Hindi forms.
         keyword_hint_block = ""
-        if gujarati_keyword:
+        if resolved_block:
+            # Stage 2 (multi-entity catalog resolution) — authoritative.
+            # Lists EVERY resolved entity's exact Gujarati value(s); the LLM
+            # must use them verbatim and translate nothing.
+            keyword_hint_block = resolved_block
+        elif gujarati_keyword:
             keyword_hint_block = (
                 "\nCANONICAL GUJARATI KEYWORD (resolved from the catalog — use verbatim):\n"
                 f"  '{gujarati_keyword}'\n"
