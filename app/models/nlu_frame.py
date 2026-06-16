@@ -46,6 +46,14 @@ AmbiguityScenario = Literal[
 
 QueryType = Literal["specific_search", "list_all", "count", "general_knowledge"]
 
+# What a COUNT question is counting — only set when query_type == "count".
+# The SQL builder maps (count_target, intent) → the right COUNT(...) over the
+# table that table is the canonical home of that entity.
+CountTarget = Literal[
+    "crop", "product", "category", "company", "yard",
+    "city", "taluka", "state", "animal", "video", "news", "seed",
+]
+
 # Intents answered from the database (dispatched to the SQL flow).
 SQL_INTENTS = {
     "crop_price", "equipment_kshop", "equipment_used", "kshop_product",
@@ -134,6 +142,7 @@ class NLUFrame(BaseModel):
     identifier: Optional[str] = None
     constraints: Constraints = Field(default_factory=Constraints)
     query_type: QueryType = "specific_search"
+    count_target: Optional[CountTarget] = None   # only when query_type == "count"
     is_price_query: bool = False
     is_availability_query: bool = False
 

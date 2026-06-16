@@ -118,6 +118,11 @@ list_all        — wants the whole set / "what exists", with NO specific item n
                   a search term, so the answer is a LIST of everything in that domain. (Stage 3
                   will list/browse — it must NOT keyword-filter on the generic word.)
 count           — wants a NUMBER: how many / કેટલા / ketla / कितने / total / કુલ.
+                  When query_type=count, ALSO set "count_target" = the entity being counted
+                  (the noun after "how many"): crop | product | category | company | yard |
+                  city | taluka | state | animal | video | news | seed.
+                  e.g. "how many yards"→yard, "કેટલા તાલુકા"→taluka, "how many companies in
+                  kshop"→company, "કેટલા પાક"→crop, "how many videos"→video.
 general_knowledge — greeting / general / navigation / crop_sell (no DB rows needed).
 
 ═══════════════ FLAGS ═══════════════
@@ -221,11 +226,13 @@ NOT ambiguous (route directly — do NOT ask):
 "ketla product category che buy sell ma?"
 → {"intent":"buy_sell_product","question_en":"How many product categories are there in Buy/Sell?","query_type":"count"}
 
-[a count routes by the entity's domain, never to general:]
+[a count routes by the entity's domain, never to general; set count_target:]
 "ભાવનગરમાં કેટલા તાલુકા છે?"
-→ {"intent":"crop_price","question_en":"How many talukas are there in Bhavnagar?","query_type":"count","locations":[{"name":"ભાવનગર"}]}
+→ {"intent":"crop_price","question_en":"How many talukas are there in Bhavnagar?","query_type":"count","count_target":"taluka","locations":[{"name":"ભાવનગર"}]}
 "how many videos are on the app"
-→ {"intent":"video","question_en":"How many videos are on the app?","query_type":"count"}
+→ {"intent":"video","question_en":"How many videos are on the app?","query_type":"count","count_target":"video"}
+"how many companies sell in kshop"
+→ {"intent":"kshop_product","question_en":"How many companies sell in K-Shop?","query_type":"count","count_target":"company"}
 
 "ભાવનગર ગારીયાધાર પંથકમાં અતિવૃષ્ટિ કે વાવાઝોડાની કોઈ ન્યૂઝ મુકાણી સે આજે?"
 → {"intent":"news","question_en":"Is there any news about heavy rain or cyclone for the Bhavnagar Gariadhar region today?","query_type":"specific_search","locations":[{"name":"ભાવનગર"},{"name":"ગારીયાધાર"}],"news":{"topics":["અતિવૃષ્ટિ","વાવાઝોડા"]},"constraints":{"date":"today"}}

@@ -28,6 +28,7 @@ from app.services.agent.knowledge_handler import get_knowledge_handler
 from app.services.agent.status_filter     import filter_query_results
 from app.services.agent.clarification     import get_confirmed_tables, get_intent_note
 from app.services.agent.resolver          import get_resolver, ResolvedFrame
+from app.services.agent.sql_builder       import build_sql
 from app.models.nlu_frame                 import NLUFrame
 from app.services.database.query_executor import get_query_executor
 from app.services.database.query_validator import query_validator
@@ -363,166 +364,47 @@ class Orchestrator:
                                 f"surface={subjects[0].surface!r} cands={cands[:3]}")
                     return self._did_you_mean_response(subjects[0].surface, cands)
 
-            resolved_block, gujarati_keyword = self._build_resolved_block(resolved)
             disclosures = resolved.disclosures
-            logger.info(f"🔤 Stage2 resolved | primary={gujarati_keyword!r} "
-                        f"disclosures={disclosures}")
+            logger.info(f"🔤 Stage2 resolved | disclosures={disclosures}")
 
-        # ── STEP 2: Cache check ─────────────────────────────────────────────
-        logger.step("STEP 2 / CACHE CHECK", query[:60])
-        cached = self.query_cache.get(query)
-        if cached:
-            queries, selected_tools = cached
-            selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
-            all_valid, validation_errors = query_validator.validate_batch([q.get("sql", "") for q in queries])
-            if not selected_tools or not all_valid:
-                logger.warning(
-                    f"Privacy policy rejected cached SQL; invalidating cache | "
-                    f"errors={validation_errors}"
-                )
-                self.query_cache.invalidate(query)
-                cached = None
+        selected_tools = f1_injected_tools or []
 
-        if cached:
-            logger.cache_hit(query, selected_tools)
-            stats = self.query_cache.stats
-            logger.info(f"📊 Cache: {stats['hit_rate_percent']}% hit rate | "
-                        f"${stats['cost_saved_usd']} saved | "
-                        f"{stats['tokens_saved_estimate']} tokens saved")
+        # ── STEP 3: Deterministic SQL build (Stage 3 — NO LLM) ──────────────
+        # The frame (intent + resolved ids + constraints + query_type) is
+        # compiled to SQL by composition. No tool-selection LLM, no SQL LLM,
+        # no exploratory heuristics — every clause is derived from the frame.
+        if frame is None:
+            logger.warning("SQL flow reached without a frame — cannot build")
+            return self._out_of_scope_response()
 
-            with Timer() as t:
-                query_results = await self.query_executor.execute_parallel(queries)
-            logger.step_done("STEP 2 / CACHE HIT EXECUTE", t.elapsed_ms,
-                             results=len(query_results))
-
-            specific = [r for r in query_results if r.row_count > 0 and self._is_specific(r)]
-            if not specific:
-                return self._no_data_response(selected_tools, query_results)
-
-            return await self._generate_english_answer(query, specific, selected_tools,
-                                                        cache_hit=True, disclosures=disclosures)
-
-        logger.cache_miss(query)
-
-        # ── STEP 3: Intent routing (zero-LLM table selection) ───────────────
-        # Skip if F1 already resolved the intent.
-        if f1_injected_tools:
-            selected_tools = f1_injected_tools
-            logger.step(
-                "STEP 3 / INTENT ROUTER",
-                "SKIPPED — F1 confirmed intent already resolved tables",
-            )
-            logger.step_done("STEP 3 / INTENT ROUTER", 0, result="f1_bypass")
-        else:
-            logger.step("STEP 3 / INTENT ROUTER", query[:60])
-            with Timer() as t:
-                routed = self.intent_router.route(query)
-            if routed:
-                selected_tools, rule_name = routed
-                selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
-                logger.intent_routed(rule_name, selected_tools)
-                logger.step_done("STEP 3 / INTENT ROUTER", t.elapsed_ms,
-                                 rule=rule_name, tables=str(selected_tools))
-            else:
-                logger.step_done("STEP 3 / INTENT ROUTER", t.elapsed_ms, result="ambiguous")
-                selected_tools = None
-
-        # ── STEP 4: LLM Tool Selection (only if intent routing missed) ───────
-        # Also skip if F1 already resolved the intent.
-        if not selected_tools:
-            logger.step("STEP 4 / TOOL SELECTION (LLM #1)", query[:60])
-            available = self.schema_generator.get_available_tool_names()
-            if not available and self._virtual_tools:
-                available = [f"query_{t}" for t in sorted(self._virtual_tools.keys())]
-            available = self.privacy_policy.filter_tool_names(available)
-
-            with Timer() as t:
-                tool_resp = await self.tool_selector.select_tools(
-                    user_query=query,
-                    condensed_schema=self.condensed_schema,
-                    available_tools=available,
-                )
-            selected_tools = tool_resp.selected_tools
-            selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
-            logger.step_done("STEP 4 / TOOL SELECTION", t.elapsed_ms,
-                             tools=str(selected_tools))
-            logger.tool_selection(selected_tools, query)
-
-            if not selected_tools:
-                logger.warning("Tool selection returned nothing — relaxed retry")
-                with Timer() as t2:
-                    selected_tools = await self._select_tools_relaxed(query, available)
-                    selected_tools = self.privacy_policy.filter_tool_names(selected_tools)
-                logger.step_done("STEP 4 / TOOL SELECTION RELAXED", t2.elapsed_ms,
-                                 tools=str(selected_tools))
-                if not selected_tools:
-                    logger.no_data_found("SQL", query)
-                    return self._out_of_scope_response()
-
-        # ── STEP 5: SQL Generation (LLM #2) OR Exploratory Fallback ──────
-        # Exploratory detection: strip all known filler/intent words AND domain
-        # words derived from the selected table names. If nothing meaningful
-        # remains (e.g. "what is kshop?", "what is buy sell?") → user is asking
-        # a general "what is this?" question, not searching for a specific item.
-        # In that case: skip the LLM entirely and generate a simple recent-records
-        # fallback query for the primary table. No LLM call = no hallucinated filter.
-        if self._is_exploratory_query(query, selected_tools):
-            primary_table = selected_tools[0].replace("query_", "")
-            compiled      = self._compiled_schemas.get(primary_table, "")
-            fallback_q    = self._build_exploratory_sql(primary_table, compiled)
-            queries       = [fallback_q]
-            logger.info(
-                f"🔍 EXPLORATORY QUERY DETECTED | skipped LLM SQL | "
-                f"fallback table={primary_table} | sql={fallback_q['sql'][:80]}"
-            )
-        else:
-            logger.step("STEP 5 / SQL GENERATION (LLM #2)", f"tables={selected_tools}")
-            with Timer() as t:
-                queries = await self._generate_sql_compact(
-                    query, selected_tools,
-                    keyword_hint=keyword_hint,
-                    intent_note=intent_note,
-                    gujarati_keyword=gujarati_keyword,
-                    resolved_block=resolved_block,
-                )
-            logger.step_done("STEP 5 / SQL GENERATION", t.elapsed_ms,
-                             queries_count=len(queries))
-
-            if not queries:
-                logger.warning("SQL generation returned no queries")
-                return self._out_of_scope_response()
-
+        logger.step("STEP 3 / SQL BUILD (deterministic)",
+                    f"intent={frame.intent} qtype={frame.query_type}")
+        with Timer() as t:
+            queries = build_sql(frame, resolved)
+        logger.step_done("STEP 3 / SQL BUILD", t.elapsed_ms, queries=len(queries))
+        if not queries:
+            logger.no_data_found("SQL", query)
+            return self._out_of_scope_response()
         for q in queries:
             logger.sql_generation(q.get("sql", ""), q.get("table_name", ""))
 
-        # ── STEP 6: Execute SQL ──────────────────────────────────────────────
-        logger.step("STEP 6 / SQL EXECUTION", f"{len(queries)} queries")
+        # ── STEP 4: Execute SQL ──────────────────────────────────────────────
+        logger.step("STEP 4 / SQL EXECUTION", f"{len(queries)} queries")
         with Timer() as t:
             query_results = await self.query_executor.execute_parallel(queries)
         for r in query_results:
             logger.sql_execution_done(r.table_name, r.row_count, r.execution_time * 1000)
-        logger.step_done("STEP 6 / SQL EXECUTION", t.elapsed_ms,
+        logger.step_done("STEP 4 / SQL EXECUTION", t.elapsed_ms,
                          total_rows=sum(r.row_count for r in query_results))
 
-        # Filter: specific (has WHERE) vs broad
-        specific = [r for r in query_results if r.row_count > 0 and self._is_specific(r)]
         any_rows = [r for r in query_results if r.row_count > 0]
-
         if not any_rows:
             logger.no_data_found("SQL", query)
             return self._no_data_response(selected_tools, query_results)
 
-        if not specific and any_rows:
-            logger.warning("Specific query returned 0 rows — item likely not in DB")
-            return self._not_found_response(selected_tools, query_results)
-
-        # Cache for future identical questions
-        self.query_cache.set(query, queries, selected_tools)
-        logger.info(f"💾 Query cached for future use | key={query[:50]}")
-
-        # ── STEP 7: English Answer Generation (LLM #3) ──────────────────────
+        # ── STEP 5: English Answer Generation (LLM) ─────────────────────────
         return await self._generate_english_answer(
-            query, specific, selected_tools,
+            query, any_rows, selected_tools,
             cache_hit=False,
             intent_note=intent_note,
             keyword_hint=keyword_hint,
